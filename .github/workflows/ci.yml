@@ -1,0 +1,57 @@
+name: CI
+
+# Server, web client and the Android shell's pure logic on every push; the
+# Android app itself in android.yml.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Go server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version's patch number is the commit count
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l server)" || { gofmt -l server; exit 1; }
+      - name: vet
+        run: cd server && go vet ./...
+      - name: test
+        run: cd server && go test -race ./...
+      - name: build
+        run: make build && ./bin/homeapps version
+      - name: Raspberry Pi build
+        run: cd server && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/homeapps
+      - name: scripts parse
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+
+  web:
+    name: Web client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test web/*.test.mjs
+
+  android-core:
+    name: Android shell logic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: cd apps/android/core && ../gradlew test

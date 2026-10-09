@@ -1,0 +1,54 @@
+name: Android
+
+# Builds the Android shell (apps/android) and uploads the debug APK.
+
+on:
+  push:
+    paths:
+      - 'apps/android/**'
+      - 'scripts/build-android.sh'
+      - 'scripts/version.sh'
+      - 'server/internal/version/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'apps/android/**'
+      - 'scripts/build-android.sh'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # versionCode is the commit count
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the debug APK and lint it
+        run: scripts/build-android.sh assembleDebug lintDebug
+      - name: Upload the debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: homeapps-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint
+          path: apps/android/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
