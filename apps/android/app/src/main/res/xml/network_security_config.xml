@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Home apps are served over plain http on the LAN or a tailnet, at addresses
+  nobody can list in advance (pi5.local, 192.168.x.y, 100.x.y.z), so cleartext
+  is allowed everywhere. This is the whole point of the app; an https address
+  still gets full TLS validation.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
