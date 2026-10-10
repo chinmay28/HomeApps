@@ -41,6 +41,10 @@ case "$1" in
     if [ -f "$T/fail-next-start" ]; then rm -f "$T/fail-next-start"; exit 0; fi
     exec_start="$(sed -n 's/^ExecStart=//p' "$HOMEAPPS_UNIT")"
     env_file="$(sed -n 's/^EnvironmentFile=//p' "$HOMEAPPS_UNIT")"
+    if grep -qx 'StateDirectory=homeapps' "$HOMEAPPS_UNIT"; then
+      mkdir -p "$HOMEAPPS_STATE_DIR"
+      export STATE_DIRECTORY="$HOMEAPPS_STATE_DIR"
+    fi
     (set -a; . "$env_file"; set +a; exec $exec_start) > "$T/service.log" 2>&1 &
     echo $! > "$T/pid" ;;
   disable) stop ;;
@@ -59,6 +63,7 @@ export HOMEAPPS_INSTALL_DIR="$T/opt"
 export HOMEAPPS_ENV_FILE="$T/homeapps.env"
 export HOMEAPPS_UNIT="$T/homeapps.service"
 export HOMEAPPS_SERVICE_USER=root
+export HOMEAPPS_STATE_DIR="$T/state"
 export HOMEAPPS_GO_DIR="$(go env GOROOT)"
 export HOMEAPPS_REPO="file://$ROOT"
 export HOMEAPPS_REF="$(git -C "$ROOT" rev-parse HEAD)"
@@ -74,11 +79,16 @@ grep -qx "HOMEAPPS_HOSTMAN=http://127.0.0.1:1" "$HOMEAPPS_ENV_FILE" || fail "Hos
 grep -q "warn\|cannot read HostMan" "$T/run1.log" || fail "an unreachable HostMan should be reported at the end"
 pass "fresh install serves on :$PORT and saves its settings"
 
-# 2. Upgrade with nothing set: the saved port and HostMan address are kept.
+# 2. Upgrade with nothing set: the saved port, HostMan address and custom
+#    apps are kept.
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"Router","url":"http://192.168.1.1"}' \
+  "http://127.0.0.1:$PORT/api/custom-apps" >/dev/null || fail "could not add a custom app"
+[ -f "$HOMEAPPS_STATE_DIR/custom-apps.json" ] || fail "custom apps not saved in the unit's StateDirectory"
 bash "$ROOT/scripts/quickstart.sh" > "$T/run2.log" 2>&1 || { cat "$T/run2.log"; fail "upgrade exited non-zero"; }
 health $PORT | grep -q '"app":"homeapps"' || fail "not serving on the saved port after an upgrade"
 grep -qx "HOMEAPPS_HOSTMAN=http://127.0.0.1:1" "$HOMEAPPS_ENV_FILE" || fail "upgrade forgot the HostMan address"
-pass "upgrade keeps the saved settings"
+curl -fsS "http://127.0.0.1:$PORT/api/custom-apps" | grep -q '"name":"Router"' || fail "upgrade lost the custom apps"
+pass "upgrade keeps the saved settings and custom apps"
 
 # 3. A new build that never answers is rolled back to the previous binary.
 touch "$T/fail-next-start"
@@ -95,5 +105,5 @@ pass "a bad setting is reported, not silent"
 # 5. Uninstall stops the service and removes what it installed.
 bash "$ROOT/scripts/quickstart.sh" --uninstall > "$T/run5.log" 2>&1 || { cat "$T/run5.log"; fail "uninstall exited non-zero"; }
 [ -z "$(health $PORT)" ] || fail "still serving after uninstall"
-[ ! -e "$HOMEAPPS_INSTALL_DIR" ] && [ ! -e "$HOMEAPPS_UNIT" ] && [ ! -e "$HOMEAPPS_ENV_FILE" ] || fail "uninstall left files behind"
+[ ! -e "$HOMEAPPS_INSTALL_DIR" ] && [ ! -e "$HOMEAPPS_UNIT" ] && [ ! -e "$HOMEAPPS_ENV_FILE" ] && [ ! -e "$HOMEAPPS_STATE_DIR" ] || fail "uninstall left files behind"
 pass "uninstall stops the service and removes its files"

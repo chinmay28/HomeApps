@@ -17,16 +17,20 @@ make android         # debug APK (needs the Android SDK)
 
 ## Rules that shape changes
 
-- **HostMan is the source of truth.** HomeApps keeps no list of apps and no
-  database. A new kind of data should come from HostMan's API or from the
-  apps themselves (their manifests), not from local state.
-- **Small, pure, tested components.** `catalog`, `manifest` (parsing),
+- **HostMan is the source of truth.** HomeApps keeps no database. Its one
+  piece of state is the custom apps list (`server/internal/custom`, one JSON
+  file in the data directory, written atomically) for addresses HostMan
+  doesn't run. A new kind of data should come from HostMan's API or from the
+  apps themselves (their manifests), not from more local state.
+- **Small, pure, tested components.** `catalog`, `custom.Clean`, `manifest` (parsing),
   `web/assets/view.js` and everything in `apps/android/core` are pure
   functions with table-driven tests. Keep logic there. The HTTP handlers,
   `app.js` and the Android `app/` module are glue.
-- **The wire contract is `/api/catalog`.** Snake_case, explicit `[]` and
-  `null`, `{"error": …}` bodies. `api_test.go` pins it; change it together
-  with `view.js` and `app.js`.
+- **The wire contract is `/api/catalog` and `/api/custom-apps`.** Snake_case,
+  explicit `[]` and `null`, `{"error": …}` bodies. `api_test.go` pins it;
+  change it together with `view.js` and `app.js`. Custom apps are fetched
+  separately from the catalog so they work while HostMan is down. Writes take
+  `application/json` only: with no login, that is the CSRF guard.
 - **The bridge is input.** `window.HomeAppsNative.open(id, name, url, color,
   icon)` is reachable from JavaScript. `LaunchedApp.from` validates every
   argument, and the shell honours calls only from the configured server's

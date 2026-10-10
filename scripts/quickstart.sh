@@ -9,9 +9,11 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/chinmay28/homeapps/main/scripts/quickstart.sh | sudo bash -s -- --uninstall
 #
-# HomeApps keeps no data of its own — the list of apps comes from HostMan — so
-# an upgrade is just a binary swap: the new build is health-checked after it
-# starts and the previous binary comes back if it doesn't answer.
+# The only data HomeApps keeps is the list of custom apps added by hand, in
+# systemd's StateDirectory (/var/lib/homeapps); everything else comes from
+# HostMan. An upgrade is a binary swap that leaves that list alone: the new
+# build is health-checked after it starts and the previous binary comes back
+# if it doesn't answer.
 #
 # Environment overrides (remembered in /etc/homeapps.env across upgrades):
 #   HOMEAPPS_PORT          port to listen on                 (default 8686)
@@ -30,6 +32,8 @@ BIN="$INSTALL_DIR/bin/homeapps"
 ENV_FILE="${HOMEAPPS_ENV_FILE:-/etc/homeapps.env}"
 UNIT="${HOMEAPPS_UNIT:-/etc/systemd/system/homeapps.service}"
 SERVICE_USER="${HOMEAPPS_SERVICE_USER:-homeapps}"
+# Where systemd puts StateDirectory=homeapps; only read here, to uninstall.
+STATE_DIR="${HOMEAPPS_STATE_DIR:-/var/lib/homeapps}"
 GO_DIR="${HOMEAPPS_GO_DIR:-/usr/local/go}"
 GO_VERSION=1.24.7
 
@@ -48,9 +52,9 @@ case "${1:-}" in
     systemctl disable --now homeapps.service 2>/dev/null || true
     rm -f "$UNIT" "$ENV_FILE"
     systemctl daemon-reload
-    rm -rf "$INSTALL_DIR"
+    rm -rf "$INSTALL_DIR" "$STATE_DIR"
     userdel "$SERVICE_USER" 2>/dev/null || true
-    log "Removed. HomeApps kept no data, so there is nothing else to clean up."
+    log "Removed, along with the custom apps list in $STATE_DIR."
     exit 0 ;;
   "") ;;
   *) die "Unknown option: $1 (only --uninstall is supported)" ;;
@@ -155,6 +159,7 @@ Wants=network-online.target
 User=$SERVICE_USER
 EnvironmentFile=$ENV_FILE
 ExecStart=$BIN serve
+StateDirectory=homeapps
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes

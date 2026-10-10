@@ -26,3 +26,22 @@ func TestFlagErrors(t *testing.T) {
 		t.Error("out-of-range port accepted")
 	}
 }
+
+func TestDataDir(t *testing.T) {
+	cases := []struct {
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{map[string]string{"HOME": "/home/me"}, nil, "/home/me/.config/homeapps"},
+		{map[string]string{"HOME": "/home/me", "STATE_DIRECTORY": "/var/lib/homeapps:/var/lib/other"}, nil, "/var/lib/homeapps"},
+		{map[string]string{"STATE_DIRECTORY": "/var/lib/homeapps", "HOMEAPPS_DATA": "/srv/ha"}, nil, "/srv/ha"},
+		{map[string]string{"HOMEAPPS_DATA": "/srv/ha"}, []string{"--data", "/tmp/x"}, "/tmp/x"},
+	}
+	for _, c := range cases {
+		got, err := parseFlags(c.args, env(c.env))
+		if err != nil || got.dataDir != c.want {
+			t.Errorf("env %v args %v: data %q, %v; want %q", c.env, c.args, got.dataDir, err, c.want)
+		}
+	}
+}

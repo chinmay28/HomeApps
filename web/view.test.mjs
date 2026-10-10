@@ -1,7 +1,7 @@
 // Tests for the web client's pure view logic: `node --test web/`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appsHTML, esc, filter, hostmanApp, hostsHTML, hue, monogram, summary } from '../server/internal/web/assets/view.js'
+import { allApps, appsHTML, esc, filter, hostmanApp, hostsHTML, hue, monogram, normalizeAddress, summary } from '../server/internal/web/assets/view.js'
 
 const catalog = {
   hosts: [
@@ -91,4 +91,70 @@ test('where to add apps: HostMan, opened through its own tile', () => {
   assert.doesNotMatch(appsHTML(withHostMan, 'count'), /To add an app/, 'no footer while searching')
   assert.equal(hostmanApp(catalog), null)
   assert.match(appsHTML({ hosts: [], source: catalog.source }, ''), /Deploy one in HostMan and it shows up here/)
+})
+
+const withCustom = {
+  ...catalog,
+  custom: [
+    { id: 'ca-1', name: 'Router', url: 'http://192.168.1.1/', icon: '', color: '' },
+    { id: 'ca-2', name: 'NAS', url: 'https://nas.local:5001/', icon: '/api/icons/cd', color: '#112233' },
+  ],
+}
+
+test('custom apps are counted, but health stays HostMan\'s', () => {
+  assert.deepEqual(summary(withCustom), { text: '3 apps on 2 hosts + 2 custom · SAND Vault not responding', health: 'down' })
+  assert.deepEqual(summary({ hosts: [], custom: withCustom.custom.slice(0, 1) }), { text: '1 custom app', health: 'unknown' })
+  const healthy = { hosts: [{ name: 'a', apps: [{ name: 'x', health: 'up' }] }], custom: withCustom.custom }
+  assert.equal(summary(healthy).health, 'up', 'a custom app has no health, so it cannot make the summary unknown')
+})
+
+test('custom apps open like any other and come first', () => {
+  assert.deepEqual(allApps(withCustom).map((a) => a.id), ['ca-1', 'ca-2', 'hm-1', 'hm-2', 'hm-3'])
+  const html = appsHTML(withCustom, '')
+  assert.ok(html.indexOf('My apps') < html.indexOf('nakedpi'), 'the hand-picked apps lead')
+  assert.match(html, /href="http:\/\/192\.168\.1\.1\/" data-app="ca-1"/)
+  assert.match(html, /aria-label="Router">/, 'no health words for an app without health')
+  assert.doesNotMatch(html.slice(0, html.indexOf('nakedpi')), /dot--/, 'and no dot')
+  assert.match(html, /data-action="add-app"/)
+})
+
+test('search finds custom apps by name and by address', () => {
+  assert.deepEqual(filter(withCustom, 'router').custom.map((a) => a.id), ['ca-1'])
+  assert.deepEqual(filter(withCustom, 'nas.local').custom.map((a) => a.id), ['ca-2'])
+  assert.equal(filter(withCustom, 'mesh').custom.length, 0)
+  assert.doesNotMatch(appsHTML(withCustom, 'mesh'), /My apps/, 'no empty section')
+  assert.match(appsHTML({ hosts: [], custom: withCustom.custom }, 'router'), /data-app="ca-1"/)
+})
+
+test('with nothing at all, both ways to add an app are offered', () => {
+  const html = appsHTML({ hosts: [], custom: [] }, '')
+  assert.match(html, /Deploy one in HostMan/)
+  assert.match(html, /<button type="button" class="link" data-action="add-app">add any web address<\/button>/)
+})
+
+test('hosts view lists custom apps with an Edit button each', () => {
+  const html = hostsHTML(withCustom, 'v1')
+  assert.match(html, /<h2>My apps<\/h2>/)
+  assert.match(html, /data-action="edit-app" data-id="ca-2"/)
+  assert.match(html, /https:\/\/nas\.local:5001\//)
+  assert.doesNotMatch(hostsHTML(catalog, 'v1'), /My apps/, 'no card without custom apps')
+})
+
+test('custom apps are escaped too', () => {
+  const evil = { hosts: [], custom: [{ id: '"><x', name: '<script>', url: 'http://a/"onmouseover="x', icon: '', color: '' }] }
+  for (const html of [appsHTML(evil, ''), hostsHTML(evil, 'v1')]) {
+    assert.doesNotMatch(html, /<script>|"><x|"onmouseover/)
+  }
+})
+
+test('normalizeAddress reads a bare host the way an address bar does', () => {
+  assert.equal(normalizeAddress('pi5.local:8080'), 'http://pi5.local:8080')
+  assert.equal(normalizeAddress('  192.168.1.1  '), 'http://192.168.1.1')
+  assert.equal(normalizeAddress('//nas.local'), 'http://nas.local')
+  assert.equal(normalizeAddress('https://nas.local'), 'https://nas.local')
+  assert.equal(normalizeAddress('HTTP://x'), 'HTTP://x')
+  assert.equal(normalizeAddress('ftp://x'), 'ftp://x', 'a scheme is left for the server to refuse')
+  assert.equal(normalizeAddress('javascript:alert(1)'), 'javascript:alert(1)')
+  assert.equal(normalizeAddress('localhost:3000/x'), 'http://localhost:3000/x')
+  assert.equal(normalizeAddress('   '), '')
 })
