@@ -4,8 +4,10 @@ name: Release
 # that commit builds (scripts/version.sh): the static server binaries for a Pi
 # and a PC, a .sha256 beside each, and the Android APK.
 #
-# Run it from the Actions tab (workflow_dispatch) on main, or push a v* tag;
-# a tag that isn't the version its commit builds is refused.
+# Every merge to main releases automatically: the version's patch number is
+# the commit count, so each commit on main is a patch release. It can also be
+# run from the Actions tab (workflow_dispatch) or by pushing a v* tag; a tag
+# that isn't the version its commit builds is refused.
 #
 # The APK is release-signed when the HOMEAPPS_KEYSTORE_BASE64,
 # HOMEAPPS_KEYSTORE_PASSWORD, HOMEAPPS_KEY_ALIAS and HOMEAPPS_KEY_PASSWORD
@@ -15,6 +17,7 @@ name: Release
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -52,20 +55,27 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$v" ]; then
             echo "::error::tag $GITHUB_REF_NAME is not the version this commit builds ($v)"; exit 1
           fi
+          # A re-run on a commit that already shipped has nothing to do; it
+          # is not a failure.
           if gh release view "$v" >/dev/null 2>&1; then
-            echo "::error::release $v already exists"; exit 1
+            echo "::notice::release $v already exists; nothing to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Test
+        if: steps.version.outputs.skip != 'true'
         run: |
           (cd server && go test ./...)
           node --test web/*.test.mjs
           (cd apps/android/core && ../gradlew test)
 
       - name: Build the server binaries
+        if: steps.version.outputs.skip != 'true'
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -77,7 +87,7 @@ jobs:
           done
 
       - name: Build the signed APK
-        if: env.HAS_KEY == 'true'
+        if: steps.version.outputs.skip != 'true' && env.HAS_KEY == 'true'
         run: |
           set -euo pipefail
           echo "$HOMEAPPS_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
@@ -90,16 +100,18 @@ jobs:
           HOMEAPPS_KEY_PASSWORD: ${{ secrets.HOMEAPPS_KEY_PASSWORD }}
 
       - name: Build the debug APK
-        if: env.HAS_KEY != 'true'
+        if: steps.version.outputs.skip != 'true' && env.HAS_KEY != 'true'
         run: |
           set -euo pipefail
           scripts/build-android.sh assembleDebug
           cp apps/android/app/build/outputs/apk/debug/app-debug.apk "dist/homeapps-${{ steps.version.outputs.version }}-debug.apk"
 
       - name: Checksums
+        if: steps.version.outputs.skip != 'true'
         run: cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done && ls -l
 
       - name: Publish
+        if: steps.version.outputs.skip != 'true'
         run: |
           set -euo pipefail
           v="${{ steps.version.outputs.version }}"
