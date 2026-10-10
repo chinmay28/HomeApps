@@ -36,6 +36,9 @@ GO_VERSION=1.24.7
 log()  { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m!!\033[0m %s\n' "$*" >&2; exit 1; }
+# Never fail silently: under set -e a failing command would otherwise end the
+# run with no word of what broke, which is all HostMan's log could show.
+trap 'rc=$?; printf "\033[1;31m!!\033[0m failed (exit %s) at line %s: %s\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 [ "$(id -u)" -eq 0 ] || die "Run this with sudo."
 
@@ -59,7 +62,12 @@ command -v apt-get >/dev/null || die "This installer expects a Debian or Ubuntu 
 # ------------------------------------------------------------------ settings
 # Values given now win; otherwise keep what the last install wrote; otherwise
 # the defaults. The file is root-only because it may hold HostMan's PIN.
-saved() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; }
+# Always succeeds: on a first install there is no file, and a failing command
+# substitution inside an assignment would end the script under set -e.
+saved() {
+  if [ -f "$ENV_FILE" ]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; fi
+  return 0
+}
 PORT="${HOMEAPPS_PORT:-$(saved PORT)}";                 PORT="${PORT:-8686}"
 HOSTMAN="${HOMEAPPS_HOSTMAN:-$(saved HOMEAPPS_HOSTMAN)}"; HOSTMAN="${HOSTMAN:-http://127.0.0.1:8899}"
 PIN="${HOMEAPPS_HOSTMAN_PIN:-$(saved HOMEAPPS_HOSTMAN_PIN)}"
