@@ -1,7 +1,7 @@
 // Tests for the web client's pure view logic: `node --test web/`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appsHTML, esc, filter, hostsHTML, hue, monogram, summary } from '../server/internal/web/assets/view.js'
+import { appsHTML, esc, filter, hostmanApp, hostsHTML, hue, monogram, summary } from '../server/internal/web/assets/view.js'
 
 const catalog = {
   hosts: [
@@ -71,10 +71,24 @@ test('hosts view shows metrics, the down detail and the source', () => {
   assert.match(html, /connection refused/)
   assert.match(html, /Offline/)
   assert.match(html, /HomeApps v2026\.10\.3/)
-  assert.match(html, /href="http:\/\/nakedpi\.local:8899"/)
+  assert.doesNotMatch(html, /href="http:\/\/nakedpi\.local:8899"/, 'no HostMan tile: say HostMan, link nowhere')
 })
 
 test('the change-server link only appears inside the shell', () => {
   assert.doesNotMatch(hostsHTML(catalog, 'v1'), /change-server/)
   assert.match(hostsHTML(catalog, 'v1', true), /data-action="change-server"/)
+})
+
+test('where to add apps: HostMan, opened through its own tile', () => {
+  const withHostMan = structuredClone(catalog)
+  withHostMan.source.url = 'http://127.0.0.1:8899' // HomeApps beside HostMan: useless from a phone
+  withHostMan.hosts[0].apps.push({ id: 'hm-9', name: 'HostMan', url: 'http://nakedpi.local:8899/', port: 8899, health: 'up' })
+  assert.equal(hostmanApp(withHostMan).id, 'hm-9')
+  const html = appsHTML(withHostMan, '')
+  assert.match(html, /To add an app, deploy it to a host in <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
+  assert.doesNotMatch(html, /127\.0\.0\.1/, 'the loopback source address must never become a link')
+  assert.match(hostsHTML(withHostMan, 'v1'), /apps from <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
+  assert.doesNotMatch(appsHTML(withHostMan, 'count'), /To add an app/, 'no footer while searching')
+  assert.equal(hostmanApp(catalog), null)
+  assert.match(appsHTML({ hosts: [], source: catalog.source }, ''), /Deploy one in HostMan and it shows up here/)
 })

@@ -142,6 +142,9 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"version":"v2026.10.1"`) {
 		t.Errorf("health must answer even while HostMan is down: %d %s", w.Code, w.Body)
 	}
+	if !strings.Contains(w.Body.String(), `"app":"homeapps"`) {
+		t.Errorf("health must name the app so the shell can tell it from a sibling app: %s", w.Body)
+	}
 	if w := do(h, "/api/nope"); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), `"error"`) {
 		t.Errorf("unknown API path: %d %s", w.Code, w.Body)
 	}

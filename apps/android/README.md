@@ -5,9 +5,16 @@ and each app you open runs **full screen** in a WebView of its own.
 
 ## How it behaves
 
-- **First run** asks for the HomeApps server address (`pi5.local:8686`) and
-  checks `/api/health` before saving it. To change it later: Hosts tab, then
+- **First run** asks for the HomeApps server address (`pi5.local:8686`). It
+  is saved only if `/api/health` answers `"app":"homeapps"`. The sibling apps
+  answer health the same way, so HostMan's address (port 8899) is turned away
+  with a hint, rather than becoming the home screen. A saved address is
+  rechecked on every launch. To change it later: Hosts tab, then
   *Change HomeApps server*.
+- **Insets are handled once.** The shell pads the launcher clear of the
+  status and navigation bars (and an app clear of the camera), and consumes
+  the insets. Pages therefore see `env(safe-area-inset-*)` as zero and don't
+  add a second band of padding.
 - **Opening an app** hides the system bars. The app gets the whole screen and
   steps around only a camera cutout. Swipe from an edge to see the bars
   briefly.
