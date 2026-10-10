@@ -181,6 +181,15 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
             },
             HomeBridge.NAME,
         )
+        // The add/edit dialog's "Choose picture" is an <input type="file">,
+        // which a WebView ignores without a chrome client to show the picker.
+        webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                view: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean = pickFiles(fileChooserParams, filePathCallback)
+        }
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url.toString()

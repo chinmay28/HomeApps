@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,7 @@ func TestParseHead(t *testing.T) {
 <link rel='apple-touch-icon' href='icons/touch.png'>
 <link rel="manifest" href="manifest.webmanifest?v=2&amp;x=1">
 <link rel="icon" href="javascript:alert(1)">
+<link rel="apple-touch-icon-precomposed" href="/old-touch.png">
 </head><body><link rel="manifest" href="/not-in-head.json"></body></html>`)
 	h := ParseHead(page, mustURL(t, "http://pi5.local:8123/app/"))
 	if h.ManifestURL != "http://pi5.local:8123/app/manifest.webmanifest?v=2&x=1" {
@@ -41,6 +43,7 @@ func TestParseHead(t *testing.T) {
 	want := []Icon{
 		{URL: "http://pi5.local:8123/favicon.svg", Size: 512, Purpose: "any"},
 		{URL: "http://pi5.local:8123/app/icons/touch.png", Size: 180, Purpose: "any"},
+		{URL: "http://pi5.local:8123/old-touch.png", Size: 180, Purpose: "any"},
 	}
 	if len(h.Icons) != len(want) {
 		t.Fatalf("icons = %+v; a javascript: URL must be dropped", h.Icons)
@@ -170,13 +173,76 @@ func TestFetchRejectsNonImageIcon(t *testing.T) {
 
 func TestImageTypeSVG(t *testing.T) {
 	svg := []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>`)
-	if got := imageType("image/svg+xml", "http://h/i", svg); got != "image/svg+xml" {
+	if got := ImageType("image/svg+xml", "http://h/i", svg); got != "image/svg+xml" {
 		t.Errorf("declared SVG = %q", got)
 	}
-	if got := imageType("", "http://h/i.SVG", svg); got != "image/svg+xml" {
+	if got := ImageType("", "http://h/i.SVG", svg); got != "image/svg+xml" {
 		t.Errorf("undeclared .svg = %q", got)
 	}
-	if got := imageType("image/svg+xml", "http://h/i", []byte("<html>")); got != "" {
+	if got := ImageType("image/svg+xml", "http://h/i", []byte("<html>")); got != "" {
 		t.Errorf("non-SVG bytes declared as SVG accepted: %q", got)
+	}
+}
+
+func TestFetchResolvesAgainstTheRedirectedPage(t *testing.T) {
+	icon := pngBytes(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") == "" || strings.HasPrefix(r.Header.Get("User-Agent"), "Go-http-client") {
+			http.Error(w, "no bots", http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/":
+			http.Redirect(w, r, "/ui/index.html", http.StatusFound)
+		case "/ui/index.html":
+			w.Write([]byte(`<head><link rel="icon" href="logo.png" sizes="192x192"></head>`))
+		case "/ui/logo.png":
+			w.Write(icon)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b, err := Fetch(context.Background(), srv.Client(), srv.URL+"/")
+	if err != nil || !bytes.Equal(b.Icon, icon) {
+		t.Errorf("Fetch = %d bytes, %v; a relative icon resolves against the page it was found on", len(b.Icon), err)
+	}
+}
+
+func TestFetchTriesTheFaviconBehindALoginWall(t *testing.T) {
+	icon := pngBytes(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/favicon.ico" {
+			w.Write(icon)
+			return
+		}
+		http.Error(w, "log in", http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b, err := Fetch(context.Background(), srv.Client(), srv.URL+"/admin/")
+	if err != nil || !bytes.Equal(b.Icon, icon) {
+		t.Errorf("Fetch = %d bytes, %v; a page that refuses still has a favicon", len(b.Icon), err)
+	}
+}
+
+func TestFetchImage(t *testing.T) {
+	icon := pngBytes(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logo.png", func(w http.ResponseWriter, r *http.Request) { w.Write(icon) })
+	mux.HandleFunc("/page", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("<html></html>")) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	if data, typ, err := FetchImage(context.Background(), srv.Client(), srv.URL+"/logo.png"); err != nil || typ != "image/png" || !bytes.Equal(data, icon) {
+		t.Errorf("FetchImage(png) = %d bytes %q %v", len(data), typ, err)
+	}
+	if _, _, err := FetchImage(context.Background(), srv.Client(), srv.URL+"/page"); !errors.Is(err, ErrNotImage) {
+		t.Errorf("FetchImage(html) err = %v; want ErrNotImage", err)
+	}
+	if _, _, err := FetchImage(context.Background(), srv.Client(), srv.URL+"/missing"); err == nil {
+		t.Error("FetchImage(404) succeeded")
 	}
 }

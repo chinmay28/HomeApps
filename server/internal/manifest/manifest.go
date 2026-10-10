@@ -69,9 +69,9 @@ func ParseHead(page []byte, base *url.URL) Head {
 					if h.ManifestURL == "" {
 						h.ManifestURL = href
 					}
-				case "icon", "apple-touch-icon":
+				case "icon", "apple-touch-icon", "apple-touch-icon-precomposed":
 					size := parseSizes(attrs["sizes"])
-					if size == 0 && rel == "apple-touch-icon" {
+					if size == 0 && rel != "icon" {
 						size = 180 // Apple's default size for an unsized touch icon
 					}
 					h.Icons = append(h.Icons, Icon{URL: href, Size: size, Purpose: "any"})

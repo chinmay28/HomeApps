@@ -28,26 +28,35 @@ const (
 // ErrNoBranding means the app answered but declares nothing usable.
 var ErrNoBranding = errors.New("manifest: no icon or theme colour found")
 
+// userAgent names the fetcher. Some servers refuse Go's default one.
+const userAgent = "Mozilla/5.0 (compatible; HomeApps; +https://github.com/chinmay28/homeapps)"
+
 // Fetch loads appURL's page, its manifest if it links one, and the best icon.
 // A missing manifest is not an error as long as the page names an icon; the
-// conventional /favicon.ico is tried last.
+// conventional /favicon.ico is tried last. Links on the page resolve against
+// where it was finally served from, after redirects. A page that answers but
+// refuses (a router's login wall, a 401) still gets its /favicon.ico tried.
 func Fetch(ctx context.Context, client *http.Client, appURL string) (Brand, error) {
 	base, err := url.Parse(appURL)
 	if err != nil {
 		return Brand{}, err
 	}
-	page, _, err := get(ctx, client, appURL, maxPage)
-	if err != nil {
+	var head Head
+	page, err := get(ctx, client, appURL, maxPage)
+	switch {
+	case err == nil:
+		base = page.url
+		head = ParseHead(page.data, base)
+	case !errors.As(err, new(statusError)):
 		return Brand{}, err
 	}
-	head := ParseHead(page, base)
 
 	var b Brand
 	icons := []Icon{}
 	if head.ManifestURL != "" {
 		mu, _ := url.Parse(head.ManifestURL) // ParseHead only returns parseable URLs
-		if data, _, err := get(ctx, client, head.ManifestURL, maxManifest); err == nil {
-			if m, err := ParseManifest(data, mu); err == nil {
+		if r, err := get(ctx, client, head.ManifestURL, maxManifest); err == nil {
+			if m, err := ParseManifest(r.data, mu); err == nil {
 				b.Name = firstNonEmpty(m.ShortName, m.Name)
 				b.ThemeColor = m.ThemeColor
 				icons = append(icons, m.Icons...)
@@ -66,11 +75,7 @@ func Fetch(ctx context.Context, client *http.Client, appURL string) (Brand, erro
 	for len(icons) > 0 {
 		ic, _ := PickIcon(icons)
 		icons = remove(icons, ic)
-		data, typ, err := get(ctx, client, ic.URL, maxIcon)
-		if err != nil {
-			continue
-		}
-		if typ = imageType(typ, ic.URL, data); typ != "" {
+		if data, typ, err := FetchImage(ctx, client, ic.URL); err == nil {
 			b.Icon, b.IconType = data, typ
 			break
 		}
@@ -81,35 +86,67 @@ func Fetch(ctx context.Context, client *http.Client, appURL string) (Brand, erro
 	return b, nil
 }
 
-func get(ctx context.Context, client *http.Client, u string, limit int64) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// ErrNotImage means an address answered with something other than an image.
+var ErrNotImage = errors.New("manifest: not an image")
+
+// FetchImage loads one image of at most 512 KiB and names its media type.
+func FetchImage(ctx context.Context, client *http.Client, imageURL string) ([]byte, string, error) {
+	r, err := get(ctx, client, imageURL, maxIcon)
 	if err != nil {
 		return nil, "", err
 	}
+	typ := ImageType(r.typ, r.url.Path, r.data)
+	if typ == "" {
+		return nil, "", fmt.Errorf("%w: %s", ErrNotImage, imageURL)
+	}
+	return r.data, typ, nil
+}
+
+// statusError is a server that answered, but not with 200 OK.
+type statusError struct {
+	url  string
+	code int
+}
+
+func (e statusError) Error() string { return fmt.Sprintf("manifest: GET %s: HTTP %d", e.url, e.code) }
+
+type response struct {
+	data []byte
+	typ  string   // the declared Content-Type
+	url  *url.URL // where the body came from, after redirects
+}
+
+func get(ctx context.Context, client *http.Client, u string, limit int64) (response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return response{}, err
+	}
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return response{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("manifest: GET %s: HTTP %d", u, resp.StatusCode)
+		return response{}, statusError{url: u, code: resp.StatusCode}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, "", err
+		return response{}, err
 	}
 	if int64(len(data)) > limit {
-		return nil, "", fmt.Errorf("manifest: GET %s: larger than %d bytes", u, limit)
+		return response{}, fmt.Errorf("manifest: GET %s: larger than %d bytes", u, limit)
 	}
-	return data, resp.Header.Get("Content-Type"), nil
+	return response{data: data, typ: resp.Header.Get("Content-Type"), url: resp.Request.URL}, nil
 }
 
-// imageType returns the media type to serve an icon as, or "" if the bytes
+// ImageType returns the media type to serve an icon as, or "" if the bytes
 // are not an image. The declared type is trusted only when the content agrees,
-// except for SVG, which sniffs as XML.
-func imageType(declared, u string, data []byte) string {
+// except for SVG, which sniffs as XML: that takes a declared type or a path
+// ending in .svg. Pure.
+func ImageType(declared, path string, data []byte) string {
 	mt, _, _ := mime.ParseMediaType(declared)
-	if mt == "image/svg+xml" || (mt == "" && strings.HasSuffix(strings.ToLower(u), ".svg")) {
+	if mt == "image/svg+xml" || (mt == "" && strings.HasSuffix(strings.ToLower(path), ".svg")) {
 		if strings.Contains(string(data[:min(len(data), 1024)]), "<svg") {
 			return "image/svg+xml"
 		}

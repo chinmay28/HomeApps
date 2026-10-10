@@ -123,7 +123,10 @@ func serve(args []string) error {
 	}, 6*time.Hour, 10*time.Minute)
 
 	mux := http.NewServeMux()
-	api.New(hm, apps, brands, version.String(), log).Routes(mux)
+	fetchImage := func(ctx context.Context, u string) ([]byte, string, error) {
+		return manifest.FetchImage(ctx, fetchClient, u)
+	}
+	api.New(hm, apps, brands, fetchImage, version.String(), log).Routes(mux)
 	assets := web.Assets()
 	if cfg.webDist != "" {
 		assets = os.DirFS(cfg.webDist)

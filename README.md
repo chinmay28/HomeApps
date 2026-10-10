@@ -64,12 +64,18 @@ knows its address: an HTTP health check, or a parameter named `port`.
 Anything HostMan doesn't run can be added by hand: tap **Add** (or *add any
 web address* under the grid), type an `http://` or `https://` address and,
 optionally, a name. A bare `pi5.local:8080` means `http://pi5.local:8080`.
-Custom apps show first, under **My apps**, get their icon from their own
-manifest like any other app, and open the same way: full screen on Android,
-a new tab in a browser. They are kept on the HomeApps server, so every phone
-sees the same list, and they still open while HostMan is down. Change or
-remove one with **Edit** on the Hosts page. Custom apps have no health dot:
-nothing checks them.
+Custom apps show first, under **My apps**, and open the same way: full screen
+on Android, a new tab in a browser. They are kept on the HomeApps server, so
+every phone sees the same list, and they still open while HostMan is down.
+Custom apps have no health dot: nothing checks them.
+
+A custom app finds its own icon, like any other app: from its web manifest,
+else the icons its page links, else its `/favicon.ico` (tried even when the
+page itself asks for a login). To give it a different one, tap **Edit** beside
+*My apps* (or beside the app on the Hosts page), tap the app, and choose a
+picture from the phone or type a picture's address. HomeApps keeps a copy, so
+the picture need not stay where it was. *Use the app's own* goes back to the
+found icon. **Remove** is in the same dialog.
 
 ## Using it
 
@@ -99,11 +105,15 @@ colour that is stable for its name.
 | GET | `/api/health` | `{"app":"homeapps","status":"ok","version":"v2026.10.12"}`. Answers even while HostMan is down. |
 | GET | `/api/catalog` | Hosts and their openable apps (see below). 502 `{"error": …}` when HostMan can't be read. |
 | GET | `/api/icons/{key}` | An app's icon, as learned from its manifest. |
-| GET | `/api/custom-apps` | `{"apps": [{"id", "name", "url", "icon", "color"}]}`, by name. Answers while HostMan is down. |
+| GET | `/api/custom-apps` | `{"apps": [{"id", "name", "url", "icon", "color", "custom_icon"}]}`, by name. Answers while HostMan is down. |
 | POST | `/api/custom-apps` | `{"name", "url"}` → 201 and the app. 400 for an address that isn't http(s), 409 for one already listed. |
-| PUT | `/api/custom-apps/{id}` | `{"name", "url"}` → 200 and the app. |
+| PUT | `/api/custom-apps/{id}` | `{"name", "url"}` → 200 and the app. Its icon is kept. |
 | DELETE | `/api/custom-apps/{id}` | 204. |
+| GET | `/api/custom-apps/{id}/icon` | The icon someone gave the app; 404 when it has none. |
+| PUT | `/api/custom-apps/{id}/icon` | `{"url"}` (a picture HomeApps fetches once and keeps) or `{"data", "type"?}` (the picture, base64; `type` only for SVG), at most 256 KiB → 200 and the app. |
+| DELETE | `/api/custom-apps/{id}/icon` | Back to the app's own icon → 200 and the app. |
 
+A custom app's `custom_icon` is `true` when its `icon` is one someone gave it.
 POST and PUT take `application/json` only. There is no login, and that is what
 keeps a page on another site from adding apps through a visitor's browser: it
 can post a form here, but not JSON. Custom app IDs start with `ca-`, HostMan's
