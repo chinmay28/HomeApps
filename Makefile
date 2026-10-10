@@ -9,7 +9,7 @@ VERSION_PKG := github.com/chinmay28/homeapps/server/internal/version
 PATCH := $(shell scripts/version.sh --patch 2>/dev/null)
 LDFLAGS := -s -w $(if $(PATCH),-X $(VERSION_PKG).Patch=$(PATCH))
 
-.PHONY: build test test-go test-web test-android-core vet fmt run android version bump-version clean
+.PHONY: build test test-installer test-go test-web test-android-core vet fmt run android version bump-version clean
 
 ## build: the single static binary, web client embedded
 build:
@@ -17,6 +17,10 @@ build:
 
 ## test: everything that runs without an Android SDK
 test: test-go test-web test-android-core
+
+## test-installer: run scripts/quickstart.sh for real in a sandbox (needs root)
+test-installer:
+	sudo env "PATH=$$PATH" scripts/test-quickstart.sh
 
 test-go:
 	cd server && $(GO) test -race ./...

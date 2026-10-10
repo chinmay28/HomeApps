@@ -33,6 +33,8 @@ jobs:
         run: cd server && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/homeapps
       - name: scripts parse
         run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: installer (install, upgrade, rollback, uninstall)
+        run: sudo env "PATH=$PATH" scripts/test-quickstart.sh
 
   web:
     name: Web client
