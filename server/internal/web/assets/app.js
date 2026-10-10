@@ -57,6 +57,7 @@ function render() {
   }
   $('title').textContent = tab === 'hosts' ? 'Hosts' : 'Home'
   $('search-wrap').hidden = tab !== 'apps'
+  $('add-app').hidden = tab !== 'apps'
 
   const banner = $('banner')
   banner.hidden = !state.error
@@ -184,6 +185,7 @@ removeBtn.addEventListener('click', () => {
 })
 
 form.querySelector('[data-action="cancel"]').addEventListener('click', () => dialog.close())
+$('add-app').addEventListener('click', () => openDialog(null))
 
 view.addEventListener('click', (e) => {
   if (e.target.closest('[data-action="change-server"]')) {

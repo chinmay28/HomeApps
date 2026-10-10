@@ -53,7 +53,15 @@ body {
 }
 svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-.bar { padding: calc(env(safe-area-inset-top) + 20px) 20px 0; }
+.bar { padding: calc(env(safe-area-inset-top) + 20px) 20px 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+/* Always in reach on the Apps tab, whatever the grid holds. */
+.bar__add {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-top: 2px; min-height: 40px; padding: 0 14px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--accent);
+  font: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.bar__add svg { width: 18px; height: 18px; }
+.bar__add[hidden] { display: none; }
 .bar h1 { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
 .bar__summary { margin: 4px 0 0; font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 
