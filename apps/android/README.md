@@ -21,6 +21,11 @@ and each app you open runs **full screen** in a WebView of its own.
   status and navigation bars (and an app clear of the camera), and consumes
   the insets. Pages therefore see `env(safe-area-inset-*)` as zero and don't
   add a second band of padding.
+- **The keyboard never covers a field.** The window is edge to edge, so
+  Android doesn't shrink it for the keyboard; the shell pads the launcher and
+  the app above it instead (`core` `SafeArea`). The WebView gets shorter, the
+  page scrolls the field you're typing in back into view, and the bubble
+  moves up out of the way.
 - **Opening an app** hides the system bars. The app gets the whole screen and
   steps around only a camera cutout. Swipe from an edge to see the bars
   briefly.

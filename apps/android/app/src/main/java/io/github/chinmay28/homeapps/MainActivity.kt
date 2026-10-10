@@ -27,12 +27,14 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.addCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.chinmay28.homeapps.core.LaunchedApp
 import io.github.chinmay28.homeapps.core.Navigation
+import io.github.chinmay28.homeapps.core.SafeArea
 import io.github.chinmay28.homeapps.core.ServerAddress
 import io.github.chinmay28.homeapps.core.ServerCheck
 import io.github.chinmay28.homeapps.core.Sessions
@@ -145,16 +147,25 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
     private fun applyInsets(insets: WindowInsetsCompat) {
         // The launcher sits inside the bars; an app gets the whole screen and
         // only steps around the camera, whose inset is there even with the
-        // bars hidden.
-        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-        homeFrame.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-        setup?.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-        val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
-        appFrame.setPadding(cutout.left, cutout.top, cutout.right, cutout.bottom)
-        val gestures = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())
-        bubble.setInsets(cutout.top, maxOf(cutout.bottom, gestures.bottom))
+        // bars hidden. Both leave room for the keyboard (SafeArea).
+        val bars = insets.edges(WindowInsetsCompat.Type.systemBars())
+        val cutout = insets.edges(WindowInsetsCompat.Type.displayCutout())
+        val keyboard = insets.edges(WindowInsetsCompat.Type.ime())
+        val launcher = SafeArea.launcher(bars, cutout, keyboard)
+        homeFrame.setPadding(launcher.left, launcher.top, launcher.right, launcher.bottom)
+        setup?.setPadding(launcher.left, launcher.top, launcher.right, launcher.bottom)
+        val app = SafeArea.app(cutout, keyboard)
+        appFrame.setPadding(app.left, app.top, app.right, app.bottom)
+        val gestures = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars()).toEdges()
+        bubble.setInsets(cutout.top, SafeArea.bubbleBottom(cutout, gestures, keyboard))
+        // Lift the bubble over the keyboard, and back down once it closes.
+        if (bubble.visibility == View.VISIBLE) bubble.post { bubble.place(prefs.bubbleOnRight, prefs.bubbleY) }
         switcher.setBottomInset(gestures.bottom)
     }
+
+    private fun WindowInsetsCompat.edges(type: Int) = getInsets(type).toEdges()
+
+    private fun Insets.toEdges() = SafeArea.Edges(left, top, right, bottom)
 
     // --- The launcher -------------------------------------------------------
 
