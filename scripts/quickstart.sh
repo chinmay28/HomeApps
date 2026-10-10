@@ -9,13 +9,15 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/chinmay28/homeapps/main/scripts/quickstart.sh | sudo bash -s -- --uninstall
 #
-# HomeApps keeps no data of its own — the list of apps comes from HostMan — so
-# an upgrade is just a binary swap: the new build is health-checked after it
-# starts and the previous binary comes back if it doesn't answer.
+# HomeApps's only data is the list of apps added by address, in
+# /var/lib/homeapps; HostMan's apps come from HostMan. An upgrade is a binary
+# swap: the new build is health-checked after it starts and the previous
+# binary comes back if it doesn't answer. The list is kept across upgrades and
+# uninstalls.
 #
 # Environment overrides (remembered in /etc/homeapps.env across upgrades):
 #   HOMEAPPS_PORT          port to listen on                 (default 8686)
-#   HOMEAPPS_HOSTMAN       HostMan to read apps from         (default http://127.0.0.1:8899)
+#   HOMEAPPS_HOSTMAN       HostMan to read apps from, or off (default http://127.0.0.1:8899)
 #   HOMEAPPS_HOSTMAN_PIN   HostMan's PIN, if it has one      (default none)
 #   HOMEAPPS_REF           git branch, tag or commit         (default main)
 #   HOMEAPPS_REPO          repository to build from
@@ -28,6 +30,7 @@ INSTALL_DIR="${HOMEAPPS_INSTALL_DIR:-/opt/homeapps}"
 BUILD_DIR="$INSTALL_DIR/src"
 BIN="$INSTALL_DIR/bin/homeapps"
 ENV_FILE="${HOMEAPPS_ENV_FILE:-/etc/homeapps.env}"
+DATA_DIR="${HOMEAPPS_DATA_DIR:-/var/lib/homeapps}"
 UNIT="${HOMEAPPS_UNIT:-/etc/systemd/system/homeapps.service}"
 SERVICE_USER="${HOMEAPPS_SERVICE_USER:-homeapps}"
 GO_DIR="${HOMEAPPS_GO_DIR:-/usr/local/go}"
@@ -50,7 +53,8 @@ case "${1:-}" in
     systemctl daemon-reload
     rm -rf "$INSTALL_DIR"
     userdel "$SERVICE_USER" 2>/dev/null || true
-    log "Removed. HomeApps kept no data, so there is nothing else to clean up."
+    log "Removed. The apps you added by address are still in $DATA_DIR;"
+    log "delete it with: sudo rm -rf $DATA_DIR"
     exit 0 ;;
   "") ;;
   *) die "Unknown option: $1 (only --uninstall is supported)" ;;
@@ -136,12 +140,16 @@ mkdir -p "$INSTALL_DIR/bin"
 # ---------------------------------------------------------------- service
 id "$SERVICE_USER" >/dev/null 2>&1 ||
   useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$SERVICE_USER"
+# systemd creates and chowns the StateDirectory itself; making it here too
+# keeps a manual start (or the installer's own test) working.
+mkdir -p "$DATA_DIR" && chown "$SERVICE_USER" "$DATA_DIR"
 
 umask 077
 cat > "$ENV_FILE" <<ENV
 PORT=$PORT
 HOMEAPPS_HOSTMAN=$HOSTMAN
 HOMEAPPS_HOSTMAN_PIN=$PIN
+HOMEAPPS_DATA=$DATA_DIR/apps.json
 ENV
 umask 022
 
@@ -165,6 +173,8 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
+# The one writable place under ProtectSystem=strict: the apps added by address.
+StateDirectory=$(basename "$DATA_DIR")
 
 [Install]
 WantedBy=multi-user.target

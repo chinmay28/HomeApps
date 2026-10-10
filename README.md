@@ -5,8 +5,10 @@ the self-hosted apps on your LAN: one home screen with every app on every
 host, each with its own icon and a live health dot. On Android, an app opens
 **full screen** inside HomeApps, and switching between apps is instant.
 
-It reads everything from [HostMan](https://github.com/chinmay28/hostman), so
-there is nothing to set up: whatever HostMan has deployed shows up here.
+Apps come from two places: whatever [HostMan](https://github.com/chinmay28/hostman)
+has deployed shows up on its own, and anything else (a router page, a NAS, an
+app on a machine HostMan doesn't manage) you add by its address with **+**.
+HostMan is optional: without it, HomeApps is a launcher for the apps you add.
 
 ```
  phone ──▶ HomeApps (Go, :8686) ──▶ HostMan /api/overview   hosts, apps, ports, health
@@ -52,9 +54,18 @@ HostMan has a PIN, also add `HOMEAPPS_HOSTMAN_PIN=…`.
 
 ### Adding apps
 
-HomeApps lists whatever HostMan has deployed, so you add an app by deploying it
-from HostMan. It appears in HomeApps within 15 seconds, as long as HostMan
-knows its address: an HTTP health check, or a parameter named `port`.
+There are two ways to add an app:
+
+- **By address:** tap **+**, paste the address (`pi5.local:8123`,
+  `http://nas.local/admin`) and optionally give it a name. Leave the name
+  blank and the app's own manifest names it. These apps form the **My apps**
+  section. Edit or remove them from the Hosts tab (removing takes a second
+  tap). The list lives on the HomeApps server (`/var/lib/homeapps/apps.json`),
+  so every phone and browser shares it, and HomeApps checks their health
+  itself.
+- **From HostMan:** deploy the app there. It appears within 15 seconds, as
+  long as HostMan knows its address: an HTTP health check, or a parameter
+  named `port`.
 
 ## Using it
 
@@ -80,11 +91,19 @@ colour that is stable for its name.
 | Method | Path | |
 |---|---|---|
 | GET | `/api/health` | `{"app":"homeapps","status":"ok","version":"v2026.10.12"}`. Answers even while HostMan is down. |
-| GET | `/api/catalog` | Hosts and their openable apps (see below). 502 `{"error": …}` when HostMan can't be read. |
+| GET | `/api/catalog` | Your apps and HostMan's hosts (see below). Always 200: if HostMan can't be read, `hosts` is `[]` and `hostman_error` says why. |
+| GET | `/api/apps` | The apps added by address. |
+| POST | `/api/apps` | Add one: `{"url": "pi5.local:8123", "name": "optional"}`. Returns 201 with the app, 400 for a bad address, 409 if the address is already listed. |
+| PATCH | `/api/apps/{id}` | Change `name` and/or `url`. |
+| DELETE | `/api/apps/{id}` | Remove one (204). |
 | GET | `/api/icons/{key}` | An app's icon, as learned from its manifest. |
 
 ```json
 {
+  "my_apps": [{
+    "id": "my-3f9a0c12b4de", "name": "Router", "url": "http://router.lan/", "port": 80,
+    "health": "up", "detail": "", "version": "", "icon": "", "color": ""
+  }],
   "hosts": [{
     "id": 1, "name": "pi5", "address": "pi5.local", "online": true, "self": false,
     "cpu_pct": 2.1, "mem_pct": 31.0,
@@ -95,9 +114,12 @@ colour that is stable for its name.
     }]
   }],
   "source": {"kind": "hostman", "url": "http://127.0.0.1:8899"},
+  "hostman_error": "",
   "fetched_at": "2026-10-09T17:02:11Z"
 }
 ```
+
+`source` is `null` when HomeApps runs without HostMan.
 
 `health` is `up`, `down` or `unknown`. Installations without an address to
 open are left out. The self host comes first, then hosts and apps by name.
@@ -111,7 +133,8 @@ defaults:
 |---|---|---|
 | `--host` | `HOST` | `0.0.0.0` |
 | `--port` | `PORT` | `8686` |
-| `--hostman` | `HOMEAPPS_HOSTMAN` | `http://127.0.0.1:8899` |
+| `--hostman` | `HOMEAPPS_HOSTMAN` | `http://127.0.0.1:8899`; `off` for none |
+| `--data` | `HOMEAPPS_DATA` | `$STATE_DIRECTORY/apps.json` under systemd, else `./homeapps-apps.json` |
 | `--web-dist` | `WEB_DIST` | embedded client |
 | | `HOMEAPPS_HOSTMAN_PIN` | none. Env only, so it never shows in `ps`. |
 
@@ -131,7 +154,9 @@ make version     # the version this tree builds as
 | Path | What it is |
 |---|---|
 | `server/internal/hostman` | HostMan client: overview, PIN login, re-login after HostMan restarts |
-| `server/internal/catalog` | Pure: overview to hosts and apps, health, ordering |
+| `server/internal/catalog` | Pure: overview to hosts and apps, health, ordering; added apps to launcher entries |
+| `server/internal/myapps` | The apps added by address: validation, and a JSON file written atomically |
+| `server/internal/probe` | Non-blocking health checks for the added apps |
 | `server/internal/manifest` | Pure parsing of a page head and web manifest, icon choice, plus the fetch |
 | `server/internal/branding` | Non-blocking icon/colour cache with refresh and retry |
 | `server/internal/api` | HTTP: catalog, icons, health |
