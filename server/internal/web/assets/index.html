@@ -17,9 +17,6 @@
     <h1 id="title">Home</h1>
     <p class="bar__summary" id="summary"><span class="dot dot--unknown"></span>Loading…</p>
   </div>
-  <button type="button" class="bar__add" id="add-app" aria-label="Add an app">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-  </button>
 </header>
 <div class="search" id="search-wrap">
   <label class="search__box">
@@ -30,6 +27,11 @@
 <div class="banner" id="banner" role="status" hidden></div>
 <main id="view" tabindex="-1"></main>
 <nav class="tabs" aria-label="Sections">
+  <!-- The floating add button rides on the tab bar (CountRoster's pattern), so
+       it always sits just above it, whatever the bar's height. -->
+  <button type="button" class="fab" id="add-app" aria-label="Add an app" title="Add an app">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
   <a class="tabs__tab" href="#/" data-tab="apps">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>Apps</a>
   <a class="tabs__tab" href="#/hosts" data-tab="hosts">

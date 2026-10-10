@@ -88,7 +88,7 @@ test('where to add apps: HostMan, opened through its own tile', () => {
   assert.match(html, /deploy one to a host in <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
   assert.doesNotMatch(html, /127\.0\.0\.1/, 'the loopback source address must never become a link')
   assert.match(hostsHTML(withHostMan, 'v1'), /apps from <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
-  assert.doesNotMatch(appsHTML(withHostMan, 'count'), /Add an app by its address/, 'no footer while searching')
+  assert.doesNotMatch(appsHTML(withHostMan, 'count'), /to add an app by its address/, 'no footer while searching')
   assert.equal(hostmanApp(catalog), null)
   assert.match(appsHTML({ hosts: [], source: catalog.source }, ''), /deploy one in HostMan and it shows up here/)
 })

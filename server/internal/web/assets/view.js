@@ -105,7 +105,7 @@ export function appsHTML(catalog, query) {
   }).join('')
   if (query) return sections
   const viaHostMan = catalog?.source ? `, or deploy one to a host in ${hostmanLink(catalog, 'HostMan')}` : ''
-  return sections + `<p class="about">Add an app by its address with <a href="#" data-action="add-app">+</a>${viaHostMan}.</p>`
+  return sections + `<p class="about">Tap <a href="#" data-action="add-app">+</a> to add an app by its address${viaHostMan}.</p>`
 }
 
 // HostMan's own tile, if HostMan manages itself: the one app on the port
