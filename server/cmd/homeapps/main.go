@@ -1,11 +1,12 @@
 // Command homeapps serves the HomeApps launcher: the web client and an API
-// that lists every app HostMan has deployed, with each app's own icon.
+// that lists every app HostMan has deployed, with each app's own icon, plus
+// the custom apps added by hand.
 //
-//	homeapps [serve] [--host H] [--port N] [--hostman URL] [--web-dist DIR]
+//	homeapps [serve] [--host H] [--port N] [--hostman URL] [--data DIR] [--web-dist DIR]
 //	homeapps version
 //
 // Each flag overrides its environment fallback (HOST, PORT, HOMEAPPS_HOSTMAN,
-// WEB_DIST). The HostMan PIN is read only from HOMEAPPS_HOSTMAN_PIN, so it
+// HOMEAPPS_DATA, then systemd's STATE_DIRECTORY, WEB_DIST). The HostMan PIN is read only from HOMEAPPS_HOSTMAN_PIN, so it
 // never shows up in a process listing.
 package main
 
@@ -19,12 +20,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/chinmay28/homeapps/server/internal/api"
 	"github.com/chinmay28/homeapps/server/internal/branding"
+	"github.com/chinmay28/homeapps/server/internal/custom"
 	"github.com/chinmay28/homeapps/server/internal/hostman"
 	"github.com/chinmay28/homeapps/server/internal/manifest"
 	"github.com/chinmay28/homeapps/server/internal/version"
@@ -49,8 +53,8 @@ func main() {
 }
 
 type config struct {
-	host, hostmanURL, webDist string
-	port                      int
+	host, hostmanURL, dataDir, webDist string
+	port                               int
 }
 
 func parseFlags(args []string, getenv func(string) string) (config, error) {
@@ -63,6 +67,7 @@ func parseFlags(args []string, getenv func(string) string) (config, error) {
 	}
 	fs.IntVar(&c.port, "port", port, "port to listen on")
 	fs.StringVar(&c.hostmanURL, "hostman", envOr(getenv, "HOMEAPPS_HOSTMAN", "http://127.0.0.1:8899"), "HostMan to read hosts and apps from")
+	fs.StringVar(&c.dataDir, "data", defaultDataDir(getenv), "directory for the custom apps list")
 	fs.StringVar(&c.webDist, "web-dist", getenv("WEB_DIST"), "serve the web client from this directory instead of the embedded copy")
 	if err := fs.Parse(args); err != nil {
 		return c, err
@@ -71,6 +76,23 @@ func parseFlags(args []string, getenv func(string) string) (config, error) {
 		return c, fmt.Errorf("port %d out of range", c.port)
 	}
 	return c, nil
+}
+
+// defaultDataDir is HOMEAPPS_DATA, else the directory systemd made for the
+// unit's StateDirectory=, else ~/.config/homeapps for a run by hand.
+func defaultDataDir(getenv func(string) string) string {
+	if v := getenv("HOMEAPPS_DATA"); v != "" {
+		return v
+	}
+	if v := getenv("STATE_DIRECTORY"); v != "" {
+		// systemd lists one path per StateDirectory= entry; ours is the first.
+		first, _, _ := strings.Cut(v, ":")
+		return first
+	}
+	if home := getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", "homeapps")
+	}
+	return "homeapps-data"
 }
 
 func envOr(getenv func(string) string, key, def string) string {
@@ -91,13 +113,17 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	apps, err := custom.Open(filepath.Join(cfg.dataDir, "custom-apps.json"))
+	if err != nil {
+		return fmt.Errorf("custom apps: %w", err)
+	}
 	fetchClient := &http.Client{Timeout: 10 * time.Second}
 	brands := branding.New(func(ctx context.Context, u string) (manifest.Brand, error) {
 		return manifest.Fetch(ctx, fetchClient, u)
 	}, 6*time.Hour, 10*time.Minute)
 
 	mux := http.NewServeMux()
-	api.New(hm, brands, version.String(), log).Routes(mux)
+	api.New(hm, apps, brands, version.String(), log).Routes(mux)
 	assets := web.Assets()
 	if cfg.webDist != "" {
 		assets = os.DirFS(cfg.webDist)
@@ -113,7 +139,7 @@ func serve(args []string) error {
 	defer stop()
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("homeapps listening", "addr", srv.Addr, "hostman", hm.BaseURL(), "version", version.String())
+		log.Info("homeapps listening", "addr", srv.Addr, "hostman", hm.BaseURL(), "custom_apps", apps.Path(), "version", version.String())
 		errc <- srv.ListenAndServe()
 	}()
 	select {

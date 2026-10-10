@@ -6,12 +6,16 @@ host, each with its own icon and a live health dot. On Android, an app opens
 **full screen** inside HomeApps, and switching between apps is instant.
 
 It reads everything from [HostMan](https://github.com/chinmay28/hostman), so
-there is nothing to set up: whatever HostMan has deployed shows up here.
+there is nothing to set up: whatever HostMan has deployed shows up here. Any
+other web address (a router, a NAS, a site on the internet) can be added by
+hand as a custom app.
 
 ```
  phone ──▶ HomeApps (Go, :8686) ──▶ HostMan /api/overview   hosts, apps, ports, health
                     │
-                    └──────────────▶ each app's web manifest   icon, theme colour
+                    ├──────────────▶ each app's web manifest   icon, theme colour
+                    │
+                    └── custom-apps.json                       apps added by hand
 ```
 
 ## Install
@@ -30,8 +34,9 @@ curl -fsSL .../quickstart.sh | sudo HOMEAPPS_HOSTMAN=http://pi5.local:8899 HOMEA
 ```
 
 Re-run the same command to upgrade. The new build is health-checked after it
-starts, and the previous one comes back if it fails. `--uninstall` removes it.
-Settings are remembered in `/etc/homeapps.env`.
+starts, and the previous one comes back if it fails. `--uninstall` removes it,
+custom apps included. Settings are remembered in `/etc/homeapps.env`, custom
+apps in `/var/lib/homeapps/custom-apps.json`.
 
 ### Deploy it with HostMan
 
@@ -56,9 +61,19 @@ HomeApps lists whatever HostMan has deployed, so you add an app by deploying it
 from HostMan. It appears in HomeApps within 15 seconds, as long as HostMan
 knows its address: an HTTP health check, or a parameter named `port`.
 
+Anything HostMan doesn't run can be added by hand: tap **Add** (or *add any
+web address* under the grid), type an `http://` or `https://` address and,
+optionally, a name. A bare `pi5.local:8080` means `http://pi5.local:8080`.
+Custom apps show first, under **My apps**, get their icon from their own
+manifest like any other app, and open the same way: full screen on Android,
+a new tab in a browser. They are kept on the HomeApps server, so every phone
+sees the same list, and they still open while HostMan is down. Change or
+remove one with **Edit** on the Hosts page. Custom apps have no health dot:
+nothing checks them.
+
 ## Using it
 
-- **Apps** is the icon grid, one section per host. Each tile has a dot: green
+- **Apps** is the icon grid: your custom apps, then one section per host. Each tile has a dot: green
   for healthy, amber for not responding, grey for unknown (no check, or the
   host is offline). Search matches app and host names, so `pi5 va` finds SAND
   Vault on pi5, and Enter opens the first match.
@@ -82,6 +97,15 @@ colour that is stable for its name.
 | GET | `/api/health` | `{"app":"homeapps","status":"ok","version":"v2026.10.12"}`. Answers even while HostMan is down. |
 | GET | `/api/catalog` | Hosts and their openable apps (see below). 502 `{"error": …}` when HostMan can't be read. |
 | GET | `/api/icons/{key}` | An app's icon, as learned from its manifest. |
+| GET | `/api/custom-apps` | `{"apps": [{"id", "name", "url", "icon", "color"}]}`, by name. Answers while HostMan is down. |
+| POST | `/api/custom-apps` | `{"name", "url"}` → 201 and the app. 400 for an address that isn't http(s), 409 for one already listed. |
+| PUT | `/api/custom-apps/{id}` | `{"name", "url"}` → 200 and the app. |
+| DELETE | `/api/custom-apps/{id}` | 204. |
+
+POST and PUT take `application/json` only. There is no login, and that is what
+keeps a page on another site from adding apps through a visitor's browser: it
+can post a form here, but not JSON. Custom app IDs start with `ca-`, HostMan's
+with `hm-`.
 
 ```json
 {
@@ -112,6 +136,7 @@ defaults:
 | `--host` | `HOST` | `0.0.0.0` |
 | `--port` | `PORT` | `8686` |
 | `--hostman` | `HOMEAPPS_HOSTMAN` | `http://127.0.0.1:8899` |
+| `--data` | `HOMEAPPS_DATA` | systemd's `$STATE_DIRECTORY`, else `~/.config/homeapps`. Holds `custom-apps.json`. |
 | `--web-dist` | `WEB_DIST` | embedded client |
 | | `HOMEAPPS_HOSTMAN_PIN` | none. Env only, so it never shows in `ps`. |
 
@@ -132,9 +157,10 @@ make version     # the version this tree builds as
 |---|---|
 | `server/internal/hostman` | HostMan client: overview, PIN login, re-login after HostMan restarts |
 | `server/internal/catalog` | Pure: overview to hosts and apps, health, ordering |
+| `server/internal/custom` | Custom apps: address validation (pure) and the file-backed list |
 | `server/internal/manifest` | Pure parsing of a page head and web manifest, icon choice, plus the fetch |
 | `server/internal/branding` | Non-blocking icon/colour cache with refresh and retry |
-| `server/internal/api` | HTTP: catalog, icons, health |
+| `server/internal/api` | HTTP: catalog, custom apps, icons, health |
 | `server/internal/web` | The embedded client: hand-written HTML/CSS/ES modules, no build step |
 | `web/` | Tests for the client's pure view logic |
 | `apps/android` | The Android shell; `core/` is its pure logic, tested without the SDK |
