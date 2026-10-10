@@ -34,6 +34,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import io.github.chinmay28.homeapps.core.LaunchedApp
 import io.github.chinmay28.homeapps.core.Navigation
 import io.github.chinmay28.homeapps.core.ServerAddress
+import io.github.chinmay28.homeapps.core.ServerCheck
 import io.github.chinmay28.homeapps.core.Sessions
 import java.net.HttpURLConnection
 import java.net.URL
@@ -105,12 +106,38 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             lastInsets = insets
             applyInsets(insets)
-            insets
+            // Consumed here, never passed on: the frames are already padded
+            // clear of the bars and the camera, and a WebView that also saw the
+            // insets would report them to the page as env(safe-area-inset-*),
+            // which a PWA adds again: a second, empty band top and bottom.
+            WindowInsetsCompat.CONSUMED
         }
         onBackPressedDispatcher.addCallback(this) { handleBack() }
 
         val server = prefs.serverUrl
-        if (server == null) showSetup(prefill = null, error = null) else showHome(server)
+        if (server == null) {
+            showSetup(prefill = null, error = null)
+        } else {
+            showHome(server)
+            verifySaved(server)
+        }
+    }
+
+    /**
+     * An address saved by an older build was accepted on any /api/health,
+     * so it may be another app's (HostMan's, most likely). Recheck it once
+     * per launch; only a definite "this is not HomeApps" sends the person
+     * back to setup, never a network blip.
+     */
+    private fun verifySaved(server: String) {
+        io.execute {
+            val verdict = checkServer(server)
+            main.post {
+                if (verdict == ServerCheck.Verdict.OTHER_APP && prefs.serverUrl == server && setup == null) {
+                    showSetup(server, getString(R.string.setup_not_homeapps, server))
+                }
+            }
+        }
     }
 
     private fun applyInsets(insets: WindowInsetsCompat) {
@@ -188,13 +215,20 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
         view.setBusy(true)
         view.showError(null)
         io.execute {
-            val ok = isHomeApps(server)
+            val verdict = checkServer(server)
             main.post {
                 if (setup !== view) return@post
                 view.setBusy(false)
-                if (!ok) {
-                    view.showError(getString(R.string.setup_unreachable, server))
-                    return@post
+                when (verdict) {
+                    ServerCheck.Verdict.HOMEAPPS -> Unit
+                    ServerCheck.Verdict.OTHER_APP -> {
+                        view.showError(getString(R.string.setup_not_homeapps, server))
+                        return@post
+                    }
+                    ServerCheck.Verdict.UNREACHABLE -> {
+                        view.showError(getString(R.string.setup_unreachable, server))
+                        return@post
+                    }
                 }
                 val changed = prefs.serverUrl != server
                 prefs.serverUrl = server
@@ -204,18 +238,22 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
         }
     }
 
-    /** True when [server] answers /api/health like a HomeApps server. */
-    private fun isHomeApps(server: String): Boolean = runCatching {
-        val conn = URL(server + "api/health").openConnection() as HttpURLConnection
-        conn.connectTimeout = 5_000
-        conn.readTimeout = 5_000
-        try {
-            conn.responseCode == HttpURLConnection.HTTP_OK &&
-                conn.inputStream.bufferedReader().use { it.readText() }.contains("\"version\"")
+    /** Asks [server]'s /api/health what it is. Blocking; call off the main thread. */
+    private fun checkServer(server: String): ServerCheck.Verdict {
+        val conn = runCatching { URL(server + "api/health").openConnection() as HttpURLConnection }.getOrNull()
+            ?: return ServerCheck.Verdict.UNREACHABLE
+        return try {
+            conn.connectTimeout = 5_000
+            conn.readTimeout = 5_000
+            val status = conn.responseCode
+            val body = if (status == HttpURLConnection.HTTP_OK) conn.inputStream.bufferedReader().use { it.readText().take(4096) } else null
+            ServerCheck.classify(status, body)
+        } catch (_: java.io.IOException) {
+            ServerCheck.classify(null, null)
         } finally {
             conn.disconnect()
         }
-    }.getOrDefault(false)
+    }
 
     // --- Running apps -------------------------------------------------------
 

@@ -31,8 +31,30 @@ curl -fsSL .../quickstart.sh | sudo HOMEAPPS_HOSTMAN=http://pi5.local:8899 HOMEA
 
 Re-run the same command to upgrade. The new build is health-checked after it
 starts, and the previous one comes back if it fails. `--uninstall` removes it.
-Settings are remembered in `/etc/homeapps.env`. You can also add the same
-one-liner to HostMan as an app, with an HTTP health check on port 8686.
+Settings are remembered in `/etc/homeapps.env`.
+
+### Deploy it with HostMan
+
+HomeApps can be one of HostMan's apps, so it shows up, and updates, like the
+rest. In HostMan, **Apps → add**:
+
+| Field | Value |
+|---|---|
+| Name | `HomeApps` |
+| Install command | `curl -fsSL https://raw.githubusercontent.com/chinmay28/homeapps/main/scripts/quickstart.sh \| sudo bash` |
+| Uninstall command | the same, ending `sudo bash -s -- --uninstall` |
+| Health check | HTTP, `http://{HOST}:8686/api/health` |
+
+Deploy it to the **Home** host (the machine HostMan runs on), so the default
+`HOMEAPPS_HOSTMAN=http://127.0.0.1:8899` reaches HostMan. To put it anywhere
+else, add `HOMEAPPS_HOSTMAN=http://<hostman-machine>:8899` after `sudo`. If
+HostMan has a PIN, also add `HOMEAPPS_HOSTMAN_PIN=…`.
+
+### Adding apps
+
+HomeApps lists whatever HostMan has deployed, so you add an app by deploying it
+from HostMan. It appears in HomeApps within 15 seconds, as long as HostMan
+knows its address: an HTTP health check, or a parameter named `port`.
 
 ## Using it
 
@@ -57,7 +79,7 @@ colour that is stable for its name.
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/health` | `{"status":"ok","version":"v2026.10.12"}`. Answers even while HostMan is down. |
+| GET | `/api/health` | `{"app":"homeapps","status":"ok","version":"v2026.10.12"}`. Answers even while HostMan is down. |
 | GET | `/api/catalog` | Hosts and their openable apps (see below). 502 `{"error": …}` when HostMan can't be read. |
 | GET | `/api/icons/{key}` | An app's icon, as learned from its manifest. |
 

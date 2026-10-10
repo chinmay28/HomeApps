@@ -57,8 +57,11 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	})
 }
 
+// handleHealth names the app as well as its state. Every sibling app answers
+// /api/health with {"status","version"}, so without "app" the Android shell
+// could not tell HomeApps from, say, HostMan when someone types the wrong port.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
+	writeJSON(w, http.StatusOK, map[string]string{"app": "homeapps", "status": "ok", "version": s.version})
 }
 
 type catalogResponse struct {
