@@ -9,8 +9,14 @@ and each app you open runs **full screen** in a WebView of its own.
   is saved only if `/api/health` answers `"app":"homeapps"`. The sibling apps
   answer health the same way, so HostMan's address (port 8899) is turned away
   with a hint, rather than becoming the home screen. A saved address is
-  rechecked on every launch. To change it later: Hosts tab, then
-  *Change HomeApps server*.
+  rechecked on every launch.
+- **Several servers.** The shell remembers every HomeApps server you connect
+  to (up to 16). Hosts tab, then *Switch HomeApps server*, lists them: tap
+  one to switch, × to forget it, or type a new address to add one. Each is
+  checked again before it is shown. Apps already running keep running
+  across a switch, and Back never leads to the previous server's page.
+  Builds before this one saved a single address; it becomes the first entry
+  of the list.
 - **Insets are handled once.** The shell pads the launcher clear of the
   status and navigation bars (and an app clear of the camera), and consumes
   the insets. Pages therefore see `env(safe-area-inset-*)` as zero and don't
@@ -36,12 +42,13 @@ and each app you open runs **full screen** in a WebView of its own.
 
 | Path | |
 |---|---|
-| `core/` | Pure Kotlin/JVM, no Android SDK: which apps stay warm (`Sessions`), bridge input validation (`LaunchedApp`), server address parsing and same-origin checks, link policy (`Navigation`), bubble snapping, and tile colours matching the web client. `cd core && ../gradlew test` |
+| `core/` | Pure Kotlin/JVM, no Android SDK: which apps stay warm (`Sessions`), bridge input validation (`LaunchedApp`), server address parsing and same-origin checks, the saved servers (`ServerList`), link policy (`Navigation`), bubble snapping, and tile colours matching the web client. `cd core && ../gradlew test` |
 | `app/` | The Android layer: `MainActivity` wires the launcher WebView, `AppHost` (one WebView per app), `BubbleView`, `SwitcherView` and `SetupView`. |
 
 The launcher talks to the shell through `window.HomeAppsNative`:
-`open(id, name, url, color, icon)` and `changeServer()`. These calls are
-honoured only while the launcher shows the configured server's own page.
+`open(id, name, url, color, icon)` and `changeServer()` (which opens the
+server list). These calls are honoured only while the launcher shows the
+active server's own page.
 
 ## Building
 

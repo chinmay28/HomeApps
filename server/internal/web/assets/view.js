@@ -192,6 +192,6 @@ export function hostsHTML(catalog, version, canChangeServer = false) {
       <span class="chip">${status}</span></div>${rows}</section>`
   }).join('')
   const src = catalog?.source?.url
-  const about = `<p class="about">HomeApps ${esc(version || '')}${src ? `<br>apps from ${hostmanLink(catalog, 'HostMan')}` : ''}${canChangeServer ? '<br><a href="#" data-action="change-server">Change HomeApps server</a>' : ''}</p>`
+  const about = `<p class="about">HomeApps ${esc(version || '')}${src ? `<br>apps from ${hostmanLink(catalog, 'HostMan')}` : ''}${canChangeServer ? '<br><a href="#" data-action="change-server">Switch HomeApps server</a>' : ''}</p>`
   return custom + (cards || '<p class="empty">No hosts.</p>') + about
 }

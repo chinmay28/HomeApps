@@ -83,7 +83,9 @@ nothing checks them.
 - In the **Android app**, a tile opens the app full screen in its own
   WebView. A small bubble floats over the app: drag it to either side, and
   tap it for Home, Reload, Open in browser, Close app, and the other running
-  apps. Switching keeps each app exactly where you left it. See
+  apps. Switching keeps each app exactly where you left it. It remembers
+  several HomeApps servers (say, home and a second house): *Switch HomeApps
+  server* on the Hosts page picks one or adds another. See
   [apps/android/README.md](apps/android/README.md).
 
 Icons come from each app's own web manifest, the same icon it gets when

@@ -3,6 +3,13 @@
     <string name="app_name">HomeApps</string>
     <string name="setup_title">Connect to HomeApps</string>
     <string name="setup_body">Enter the address of your HomeApps server, the one you open in a browser.</string>
+    <string name="servers_title">HomeApps servers</string>
+    <string name="servers_body">Tap a saved server to switch to it, or add another.</string>
+    <string name="servers_saved">SAVED SERVERS</string>
+    <string name="servers_current">CURRENT</string>
+    <string name="servers_switch_to">Switch to %1$s</string>
+    <string name="servers_forget_mark">×</string>
+    <string name="servers_forget">Forget %1$s</string>
     <string name="setup_hint">pi5.local:8686</string>
     <string name="setup_connect">Connect</string>
     <string name="setup_checking">Checking…</string>

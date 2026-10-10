@@ -66,6 +66,8 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
     private var home: WebView? = null
     private var setup: SetupView? = null
     private var lastInsets: WindowInsetsCompat? = null
+    /** Set on a switch of server, so Back never leads to the previous server's page. */
+    private var clearHomeHistory = false
 
     private var pendingFiles: ValueCallback<Array<Uri>>? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -175,7 +177,7 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
         settings.allowContentAccess = false
         addJavascriptInterface(
             HomeBridge(main, isTrusted = { ServerAddress.sameOrigin(home?.url, prefs.serverUrl) }, onOpen = this@MainActivity::openApp) {
-                showSetup(prefs.serverUrl, error = null)
+                showSetup(prefill = null, error = null)
             },
             HomeBridge.NAME,
         )
@@ -189,6 +191,13 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
                 return true
             }
 
+            override fun onPageFinished(view: WebView, url: String?) {
+                if (clearHomeHistory && ServerAddress.sameOrigin(url, prefs.serverUrl)) {
+                    clearHomeHistory = false
+                    view.clearHistory()
+                }
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
                 val server = prefs.serverUrl ?: return
@@ -199,7 +208,8 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
 
     private fun showSetup(prefill: String?, error: String?) {
         setup?.let { root.removeView(it) }
-        val view = SetupView(this, prefill, error, ::connect)
+        val servers = prefs.servers
+        val view = SetupView(this, prefill, error, servers.servers, servers.active, ::connect, ::forget)
         setup = view
         root.addView(view, matchParent())
         lastInsets?.let(::applyInsets)
@@ -231,11 +241,23 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
                     }
                 }
                 val changed = prefs.serverUrl != server
-                prefs.serverUrl = server
-                if (changed) home?.loadUrl(server)
+                prefs.servers = prefs.servers.use(server) ?: return@post
+                if (changed) {
+                    clearHomeHistory = true
+                    home?.loadUrl(server)
+                }
                 showHome(server)
             }
         }
+    }
+
+    /**
+     * Drops a saved server. Forgetting the one on screen leaves none picked,
+     * so the bridge stops trusting its page and Back can't return to it.
+     */
+    private fun forget(server: String) {
+        prefs.servers = prefs.servers.forget(server)
+        showSetup(prefill = null, error = null)
     }
 
     /** Asks [server]'s /api/health what it is. Blocking; call off the main thread. */
