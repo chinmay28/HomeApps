@@ -9,6 +9,7 @@ screen in its own WebView. `README.md` has the overview and the API.
 
 ```bash
 make test            # go test -race · node --test web/*.test.mjs · gradle test in apps/android/core
+make test-installer  # runs scripts/quickstart.sh for real in a sandbox (root)
 make vet             # go vet + gofmt check
 make run             # serve against $HOMEAPPS_HOSTMAN with the client read from disk
 make build           # bin/homeapps
@@ -17,10 +18,15 @@ make android         # debug APK (needs the Android SDK)
 
 ## Rules that shape changes
 
-- **HostMan is the source of truth.** HomeApps keeps no list of apps and no
-  database. A new kind of data should come from HostMan's API or from the
-  apps themselves (their manifests), not from local state.
-- **Small, pure, tested components.** `catalog`, `manifest` (parsing),
+- **Two sources of apps, one small piece of state.** HostMan's deployed apps
+  come from its API and are never copied. The apps added by address
+  (`internal/myapps`) are the only thing HomeApps stores: one JSON file,
+  rewritten atomically, in systemd's StateDirectory (`/var/lib/homeapps`).
+  HostMan is optional (`--hostman off`), so `/api/catalog` answers 200 with
+  the added apps even when HostMan is down (`hostman_error` says why). Don't
+  grow this into a database; anything else should still come from HostMan or
+  from the apps themselves (their manifests).
+- **Small, pure, tested components.** `catalog`, `myapps` (validation), `manifest` (parsing),
   `web/assets/view.js` and everything in `apps/android/core` are pure
   functions with table-driven tests. Keep logic there. The HTTP handlers,
   `app.js` and the Android `app/` module are glue.

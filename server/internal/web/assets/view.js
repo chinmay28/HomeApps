@@ -1,7 +1,7 @@
 // Pure view logic: catalog in, HTML strings and summaries out. No DOM, no
 // fetch, so it runs under `node --test` (web/view.test.mjs). Every value from
-// the catalog goes through esc() — names and URLs come from HostMan and from
-// other apps' manifests, not from us.
+// the catalog goes through esc(): names and URLs come from HostMan, from what
+// people typed, and from other apps' manifests.
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i
 
@@ -27,16 +27,26 @@ export function hue(name) {
   return h % 360
 }
 
-export function allApps(catalog) {
-  return (catalog?.hosts || []).flatMap((h) => h.apps.map((a) => ({ ...a, host: h.name })))
+// The launcher's sections: the apps added by URL first ("My apps"), then
+// each of HostMan's hosts. A host is a group; so is the list of added apps.
+export function groups(catalog) {
+  const mine = catalog?.my_apps || []
+  const out = mine.length ? [{ key: 'mine', name: 'My apps', mine: true, apps: mine }] : []
+  return out.concat((catalog?.hosts || []).map((h) => ({ ...h, key: `host-${h.id}`, mine: false })))
 }
+
+export function allApps(catalog) {
+  return groups(catalog).flatMap((g) => g.apps.map((a) => ({ ...a, host: g.mine ? '' : g.name })))
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
 // The line under the title: how much there is and whether anything is wrong.
 export function summary(catalog) {
   const apps = allApps(catalog)
   const hosts = (catalog?.hosts || []).filter((h) => h.apps.length > 0).length
   const down = apps.filter((a) => a.health === 'down')
-  const base = `${apps.length} ${apps.length === 1 ? 'app' : 'apps'} on ${hosts} ${hosts === 1 ? 'host' : 'hosts'}`
+  const base = plural(apps.length, 'app', 'apps') + (hosts ? ` · ${plural(hosts, 'host', 'hosts')}` : '')
   if (apps.length === 0) return { text: 'No apps yet', health: 'unknown' }
   if (down.length === 1) return { text: `${base} · ${down[0].name} not responding`, health: 'down' }
   if (down.length > 1) return { text: `${base} · ${down.length} not responding`, health: 'down' }
@@ -46,16 +56,18 @@ export function summary(catalog) {
 
 // Search matches app or host names, every word anywhere, case-insensitively,
 // so "pi5 va" finds SAND Vault on pi5.
+// Returns the groups with at least one match.
 export function filter(catalog, query) {
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
-  const hosts = (catalog?.hosts || []).map((h) => ({
-    ...h,
-    apps: h.apps.filter((a) => {
-      const hay = `${a.name} ${h.name}`.toLowerCase()
-      return words.every((w) => hay.includes(w))
-    }),
-  }))
-  return { ...catalog, hosts: hosts.filter((h) => h.apps.length > 0) }
+  return groups(catalog)
+    .map((g) => ({
+      ...g,
+      apps: g.apps.filter((a) => {
+        const hay = `${a.name} ${g.name}`.toLowerCase()
+        return words.every((w) => hay.includes(w))
+      }),
+    }))
+    .filter((g) => g.apps.length > 0)
 }
 
 function iconHTML(app, small) {
@@ -75,20 +87,25 @@ function tileHTML(app) {
     aria-label="${esc(app.name)}, ${healthWord[app.health] || healthWord.unknown}">${iconHTML(app, false)}<span class="tile__name">${esc(app.name)}</span></a>`
 }
 
+const addButton = '<button type="button" class="button" data-action="add-app">Add an app</button>'
+
 export function appsHTML(catalog, query) {
   const shown = filter(catalog, query)
-  if (shown.hosts.length === 0) {
-    return query
-      ? `<p class="empty">Nothing matches “${esc(query)}”.</p>`
-      : `<p class="empty">HostMan has no apps with an address to open yet.<br>Deploy one in ${hostmanLink(catalog, 'HostMan')} and it shows up here.</p>`
+  if (shown.length === 0) {
+    if (query) return `<p class="empty">Nothing matches “${esc(query)}”.</p>`
+    const fromHostMan = catalog?.source ? `<br>Or deploy one in ${hostmanLink(catalog, 'HostMan')} and it shows up here.` : ''
+    return `<div class="empty">No apps yet. Add one by its address, like <code>pi5.local:8123</code>.${fromHostMan}<p>${addButton}</p></div>`
   }
-  return shown.hosts.map((h) => {
-    const up = h.apps.filter((a) => a.health === 'up').length
-    const countCls = up === h.apps.length ? ' section__count--ok' : h.apps.some((a) => a.health === 'down') ? ' section__count--bad' : ''
-    return `<section class="section"><div class="section__head"><h2>${esc(h.name)}</h2>
-      <span class="section__count${countCls}">${up} of ${h.apps.length} healthy</span></div>
-      <div class="grid">${h.apps.map(tileHTML).join('')}</div></section>`
-  }).join('') + (query ? '' : `<p class="about">To add an app, deploy it to a host in ${hostmanLink(catalog, 'HostMan')}.<br>It appears here once it has a port.</p>`)
+  const sections = shown.map((g) => {
+    const up = g.apps.filter((a) => a.health === 'up').length
+    const countCls = up === g.apps.length ? ' section__count--ok' : g.apps.some((a) => a.health === 'down') ? ' section__count--bad' : ''
+    return `<section class="section"><div class="section__head"><h2>${esc(g.name)}</h2>
+      <span class="section__count${countCls}">${up} of ${g.apps.length} healthy</span></div>
+      <div class="grid">${g.apps.map(tileHTML).join('')}</div></section>`
+  }).join('')
+  if (query) return sections
+  const viaHostMan = catalog?.source ? `, or deploy one to a host in ${hostmanLink(catalog, 'HostMan')}` : ''
+  return sections + `<p class="about">Add an app by its address with <a href="#" data-action="add-app">+</a>${viaHostMan}.</p>`
 }
 
 // HostMan's own tile, if HostMan manages itself: the one app on the port
@@ -119,6 +136,21 @@ function pct(v) {
   return v == null ? '–' : `${Math.round(v)}%`
 }
 
+// The added apps, each with an Edit button (removal lives in the edit dialog,
+// behind a second tap, so a slip can't delete one).
+function myAppsCardHTML(catalog) {
+  const mine = catalog?.my_apps || []
+  const rows = mine.map((a) => `<div class="row row--mine">
+      <a class="row__open" href="${esc(a.url)}" data-app="${esc(a.id)}" target="_blank" rel="noopener">${iconHTML(a, true)}
+        <span class="row__text"><span class="row__name">${esc(a.name)}</span><span class="row__sub${a.health === 'down' ? ' row__sub--down' : ''}">${esc(a.url)}</span></span>
+        <span class="dot dot--${esc(a.health)}"></span></a>
+      <button type="button" class="row__edit" data-action="edit-app" data-id="${esc(a.id)}" aria-label="Edit ${esc(a.name)}">Edit</button>
+    </div>`).join('')
+  return `<section class="card"><div class="card__head"><div><h2>My apps</h2>
+    <span class="card__meta">added by address</span></div>
+    <button type="button" class="chip chip--button" data-action="add-app">Add</button></div>${rows || '<p class="card__empty">None yet.</p>'}</section>`
+}
+
 export function hostsHTML(catalog, version, canChangeServer = false) {
   const hosts = catalog?.hosts || []
   const cards = hosts.map((h) => {
@@ -135,5 +167,5 @@ export function hostsHTML(catalog, version, canChangeServer = false) {
   }).join('')
   const src = catalog?.source?.url
   const about = `<p class="about">HomeApps ${esc(version || '')}${src ? `<br>apps from ${hostmanLink(catalog, 'HostMan')}` : ''}${canChangeServer ? '<br><a href="#" data-action="change-server">Change HomeApps server</a>' : ''}</p>`
-  return (cards || '<p class="empty">No hosts.</p>') + about
+  return myAppsCardHTML(catalog) + cards + about
 }

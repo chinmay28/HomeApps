@@ -49,9 +49,15 @@ function render() {
   $('title').textContent = tab === 'hosts' ? 'Hosts' : 'Home'
   $('search-wrap').hidden = tab !== 'apps'
 
+  // HomeApps itself unreachable beats HostMan unreachable; either way the
+  // last list stays on screen.
   const banner = $('banner')
-  banner.hidden = !state.error
-  banner.textContent = state.error ? `${state.error}${state.catalog ? ' Showing the last list we had.' : ''}` : ''
+  const hostmanError = state.catalog?.hostman_error || ''
+  const message = state.error
+    ? `${state.error}${state.catalog ? ' Showing the last list we had.' : ''}`
+    : hostmanError && `${hostmanError}${state.catalog?.hosts?.length ? ' Its apps are from the last list we had.' : ''}`
+  banner.hidden = !message
+  banner.textContent = message || ''
 
   if (!state.catalog) {
     $('summary').innerHTML = '<span class="dot dot--unknown"></span>Loading…'
@@ -69,6 +75,9 @@ async function refresh() {
     const res = await fetch('/api/catalog', { cache: 'no-store' })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(body.error || `HomeApps answered ${res.status}.`)
+    // HostMan down: HomeApps still answers, with its own apps and no hosts.
+    // Keep showing the hosts we last had rather than emptying the screen.
+    if (body.hostman_error && !body.hosts?.length && state.catalog?.hosts?.length) body.hosts = state.catalog.hosts
     state.catalog = body
     state.error = ''
     store(body)
@@ -96,7 +105,105 @@ function openApp(id) {
   return true
 }
 
+// --- Adding, editing and removing apps by address ---------------------------
+
+const dialog = $('app-dialog')
+const form = $('app-form')
+const urlInput = $('app-url')
+const nameInput = $('app-name')
+const errorText = $('app-error')
+const saveButton = $('app-save')
+const removeButton = $('app-remove')
+let editing = null // the app being edited, or null when adding
+let confirmRemove = false
+
+function showError(message) {
+  errorText.textContent = message || ''
+  errorText.hidden = !message
+}
+
+function openDialog(app) {
+  editing = app || null
+  confirmRemove = false
+  $('app-dialog-title').textContent = app ? 'Edit app' : 'Add an app'
+  saveButton.textContent = app ? 'Save' : 'Add'
+  urlInput.value = app ? app.url : ''
+  nameInput.value = app ? app.name : ''
+  removeButton.hidden = !app
+  removeButton.textContent = 'Remove'
+  showError('')
+  setBusy(false)
+  dialog.showModal()
+  urlInput.focus()
+}
+
+function setBusy(busy) {
+  for (const el of [saveButton, removeButton, urlInput, nameInput]) el.disabled = busy
+}
+
+async function call(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (res.ok) return res.status === 204 ? null : res.json()
+  const err = await res.json().catch(() => ({}))
+  throw new Error(err.error || `HomeApps answered ${res.status}.`)
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const body = { url: urlInput.value, name: nameInput.value }
+  if (!body.url.trim()) return showError("Enter the app's address, for example pi5.local:8123.")
+  setBusy(true)
+  showError('')
+  try {
+    if (editing) await call('PATCH', `/api/apps/${encodeURIComponent(editing.id)}`, body)
+    else await call('POST', '/api/apps', body)
+    dialog.close()
+    await refresh()
+  } catch (err) {
+    showError(err instanceof TypeError ? "Can't reach HomeApps." : err.message)
+    setBusy(false)
+  }
+})
+
+// Two taps: the first asks, the second removes. No confirm(): the Android
+// shell's launcher WebView has no dialog handler, so it would return false.
+removeButton.addEventListener('click', async () => {
+  if (!editing) return
+  if (!confirmRemove) {
+    confirmRemove = true
+    removeButton.textContent = 'Tap again to remove'
+    return
+  }
+  setBusy(true)
+  try {
+    await call('DELETE', `/api/apps/${encodeURIComponent(editing.id)}`)
+    dialog.close()
+    await refresh()
+  } catch (err) {
+    showError(err.message)
+    setBusy(false)
+  }
+})
+
+$('app-cancel').addEventListener('click', () => dialog.close())
+$('add-app').addEventListener('click', () => openDialog(null))
+
 view.addEventListener('click', (e) => {
+  const action = e.target.closest('[data-action]')?.dataset.action
+  if (action === 'add-app') {
+    e.preventDefault()
+    openDialog(null)
+    return
+  }
+  if (action === 'edit-app') {
+    const id = e.target.closest('[data-id]').dataset.id
+    openDialog((state.catalog?.my_apps || []).find((a) => a.id === id))
+    return
+  }
   if (e.target.closest('[data-action="change-server"]')) {
     e.preventDefault()
     window.HomeAppsNative?.changeServer?.()

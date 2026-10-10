@@ -1,12 +1,12 @@
 // Command homeapps serves the HomeApps launcher: the web client and an API
 // that lists every app HostMan has deployed, with each app's own icon.
 //
-//	homeapps [serve] [--host H] [--port N] [--hostman URL] [--web-dist DIR]
+//	homeapps [serve] [--host H] [--port N] [--hostman URL|off] [--data FILE] [--web-dist DIR]
 //	homeapps version
 //
 // Each flag overrides its environment fallback (HOST, PORT, HOMEAPPS_HOSTMAN,
-// WEB_DIST). The HostMan PIN is read only from HOMEAPPS_HOSTMAN_PIN, so it
-// never shows up in a process listing.
+// HOMEAPPS_DATA, WEB_DIST). The HostMan PIN is read only from
+// HOMEAPPS_HOSTMAN_PIN, so it never shows up in a process listing.
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -27,6 +28,8 @@ import (
 	"github.com/chinmay28/homeapps/server/internal/branding"
 	"github.com/chinmay28/homeapps/server/internal/hostman"
 	"github.com/chinmay28/homeapps/server/internal/manifest"
+	"github.com/chinmay28/homeapps/server/internal/myapps"
+	"github.com/chinmay28/homeapps/server/internal/probe"
 	"github.com/chinmay28/homeapps/server/internal/version"
 	"github.com/chinmay28/homeapps/server/internal/web"
 )
@@ -49,8 +52,8 @@ func main() {
 }
 
 type config struct {
-	host, hostmanURL, webDist string
-	port                      int
+	host, hostmanURL, dataFile, webDist string
+	port                                int
 }
 
 func parseFlags(args []string, getenv func(string) string) (config, error) {
@@ -63,6 +66,7 @@ func parseFlags(args []string, getenv func(string) string) (config, error) {
 	}
 	fs.IntVar(&c.port, "port", port, "port to listen on")
 	fs.StringVar(&c.hostmanURL, "hostman", envOr(getenv, "HOMEAPPS_HOSTMAN", "http://127.0.0.1:8899"), "HostMan to read hosts and apps from")
+	fs.StringVar(&c.dataFile, "data", envOr(getenv, "HOMEAPPS_DATA", defaultDataFile(getenv)), "file holding the apps added by URL")
 	fs.StringVar(&c.webDist, "web-dist", getenv("WEB_DIST"), "serve the web client from this directory instead of the embedded copy")
 	if err := fs.Parse(args); err != nil {
 		return c, err
@@ -71,6 +75,15 @@ func parseFlags(args []string, getenv func(string) string) (config, error) {
 		return c, fmt.Errorf("port %d out of range", c.port)
 	}
 	return c, nil
+}
+
+// defaultDataFile is systemd's state directory when the service has one
+// (StateDirectory=homeapps sets STATE_DIRECTORY), else the working directory.
+func defaultDataFile(getenv func(string) string) string {
+	if dir := getenv("STATE_DIRECTORY"); dir != "" {
+		return filepath.Join(dir, "apps.json")
+	}
+	return "homeapps-apps.json"
 }
 
 func envOr(getenv func(string) string, key, def string) string {
@@ -87,7 +100,7 @@ func serve(args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	hm, err := hostman.New(cfg.hostmanURL, os.Getenv("HOMEAPPS_HOSTMAN_PIN"))
+	store, err := myapps.Open(cfg.dataFile)
 	if err != nil {
 		return err
 	}
@@ -95,9 +108,29 @@ func serve(args []string) error {
 	brands := branding.New(func(ctx context.Context, u string) (manifest.Brand, error) {
 		return manifest.Fetch(ctx, fetchClient, u)
 	}, 6*time.Hour, 10*time.Minute)
+	apiCfg := api.Config{
+		MyApps: store,
+		Probes: probe.New(probe.Check(&http.Client{Timeout: 5 * time.Second}), 30*time.Second),
+		Brands: brands,
+		NameOf: func(ctx context.Context, u string) string {
+			b, _ := manifest.Fetch(ctx, fetchClient, u)
+			return b.Name
+		},
+		Version: version.String(),
+		Log:     log,
+	}
+	hostmanDesc := "off"
+	if cfg.hostmanURL != "" && cfg.hostmanURL != "off" {
+		hm, err := hostman.New(cfg.hostmanURL, os.Getenv("HOMEAPPS_HOSTMAN_PIN"))
+		if err != nil {
+			return err
+		}
+		apiCfg.Source = hm
+		hostmanDesc = hm.BaseURL()
+	}
 
 	mux := http.NewServeMux()
-	api.New(hm, brands, version.String(), log).Routes(mux)
+	api.New(apiCfg).Routes(mux)
 	assets := web.Assets()
 	if cfg.webDist != "" {
 		assets = os.DirFS(cfg.webDist)
@@ -113,7 +146,7 @@ func serve(args []string) error {
 	defer stop()
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("homeapps listening", "addr", srv.Addr, "hostman", hm.BaseURL(), "version", version.String())
+		log.Info("homeapps listening", "addr", srv.Addr, "hostman", hostmanDesc, "data", cfg.dataFile, "version", version.String())
 		errc <- srv.ListenAndServe()
 	}()
 	select {

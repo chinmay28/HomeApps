@@ -17,6 +17,9 @@
     <h1 id="title">Home</h1>
     <p class="bar__summary" id="summary"><span class="dot dot--unknown"></span>Loading…</p>
   </div>
+  <button type="button" class="bar__add" id="add-app" aria-label="Add an app">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
 </header>
 <div class="search" id="search-wrap">
   <label class="search__box">
@@ -32,5 +35,26 @@
   <a class="tabs__tab" href="#/hosts" data-tab="hosts">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg>Hosts</a>
 </nav>
+<!-- Outside #view, so a background redraw never touches what is being typed. -->
+<dialog class="sheet" id="app-dialog" aria-labelledby="app-dialog-title">
+  <form class="sheet__form" id="app-form" method="dialog" novalidate>
+    <h2 id="app-dialog-title">Add an app</h2>
+    <label class="field">
+      <span>Address</span>
+      <input id="app-url" name="url" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="pi5.local:8123" required>
+    </label>
+    <label class="field">
+      <span>Name <em>(optional: taken from the app if left blank)</em></span>
+      <input id="app-name" name="name" type="text" autocomplete="off" maxlength="64" placeholder="SAND Vault">
+    </label>
+    <p class="sheet__error" id="app-error" role="alert" hidden></p>
+    <div class="sheet__actions">
+      <button type="button" class="button button--danger" id="app-remove" hidden>Remove</button>
+      <span class="sheet__spacer"></span>
+      <button type="button" class="button button--quiet" id="app-cancel">Cancel</button>
+      <button type="submit" class="button" id="app-save">Add</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>

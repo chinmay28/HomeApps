@@ -1,7 +1,7 @@
 // Tests for the web client's pure view logic: `node --test web/`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appsHTML, esc, filter, hostmanApp, hostsHTML, hue, monogram, summary } from '../server/internal/web/assets/view.js'
+import { allApps, appsHTML, esc, filter, groups, hostmanApp, hostsHTML, hue, monogram, summary } from '../server/internal/web/assets/view.js'
 
 const catalog = {
   hosts: [
@@ -32,18 +32,18 @@ test('hue is stable and in range', () => {
 })
 
 test('summary names a single down app and counts only hosts with apps', () => {
-  assert.deepEqual(summary(catalog), { text: '3 apps on 2 hosts · SAND Vault not responding', health: 'down' })
+  assert.deepEqual(summary(catalog), { text: '3 apps · 2 hosts · SAND Vault not responding', health: 'down' })
   const healthy = { hosts: [{ name: 'a', apps: [{ name: 'x', health: 'up' }] }] }
-  assert.deepEqual(summary(healthy), { text: '1 app on 1 host · all healthy', health: 'up' })
+  assert.deepEqual(summary(healthy), { text: '1 app · 1 host · all healthy', health: 'up' })
   assert.equal(summary({ hosts: [] }).text, 'No apps yet')
 })
 
 test('filter matches every word against app and host name', () => {
-  const names = (c) => c.hosts.flatMap((h) => h.apps.map((a) => a.name))
+  const names = (gs) => gs.flatMap((g) => g.apps.map((a) => a.name))
   assert.deepEqual(names(filter(catalog, 'pi5 va')), ['SAND Vault'])
   assert.deepEqual(names(filter(catalog, 'MESH')), ['Thought Mesh'])
   assert.deepEqual(names(filter(catalog, '')), ['CountRoster', 'Thought Mesh', 'SAND Vault'])
-  assert.equal(filter(catalog, 'nothing').hosts.length, 0)
+  assert.equal(filter(catalog, 'nothing').length, 0)
 })
 
 test('apps view: real icon when known, monogram otherwise, health per host', () => {
@@ -85,10 +85,49 @@ test('where to add apps: HostMan, opened through its own tile', () => {
   withHostMan.hosts[0].apps.push({ id: 'hm-9', name: 'HostMan', url: 'http://nakedpi.local:8899/', port: 8899, health: 'up' })
   assert.equal(hostmanApp(withHostMan).id, 'hm-9')
   const html = appsHTML(withHostMan, '')
-  assert.match(html, /To add an app, deploy it to a host in <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
+  assert.match(html, /deploy one to a host in <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
   assert.doesNotMatch(html, /127\.0\.0\.1/, 'the loopback source address must never become a link')
   assert.match(hostsHTML(withHostMan, 'v1'), /apps from <a href="http:\/\/nakedpi\.local:8899\/" data-app="hm-9"/)
-  assert.doesNotMatch(appsHTML(withHostMan, 'count'), /To add an app/, 'no footer while searching')
+  assert.doesNotMatch(appsHTML(withHostMan, 'count'), /Add an app by its address/, 'no footer while searching')
   assert.equal(hostmanApp(catalog), null)
-  assert.match(appsHTML({ hosts: [], source: catalog.source }, ''), /Deploy one in HostMan and it shows up here/)
+  assert.match(appsHTML({ hosts: [], source: catalog.source }, ''), /deploy one in HostMan and it shows up here/)
+})
+
+const withMine = {
+  ...catalog,
+  my_apps: [
+    { id: 'my-a1', name: 'Router', url: 'http://router.lan/', port: 80, health: 'up', icon: '', color: '' },
+    { id: 'my-b2', name: 'NAS <b>', url: 'https://nas.lan/admin', port: 443, health: 'down', icon: '', color: '' },
+  ],
+}
+
+test('apps added by address come first, as "My apps"', () => {
+  const gs = groups(withMine)
+  assert.deepEqual(gs.map((g) => g.name), ['My apps', 'nakedpi', 'pi5', 'empty'])
+  assert.equal(gs[0].mine, true)
+  assert.equal(allApps(withMine).length, 5)
+  assert.deepEqual(summary(withMine), { text: '5 apps · 2 hosts · 2 not responding', health: 'down' })
+  const html = appsHTML(withMine, '')
+  assert.ok(html.indexOf('My apps') < html.indexOf('nakedpi'), 'My apps section before the hosts')
+  assert.match(html, /1 of 2 healthy/)
+  assert.match(html, /data-action="add-app"/)
+  assert.deepEqual(filter(withMine, 'router').map((g) => g.name), ['My apps'])
+  assert.deepEqual(filter(withMine, 'my').flatMap((g) => g.apps.map((a) => a.id)), ['my-a1', 'my-b2'], 'the group name is searchable')
+})
+
+test('only added apps, no HostMan', () => {
+  const solo = { my_apps: withMine.my_apps, hosts: [], source: null, hostman_error: '' }
+  assert.deepEqual(summary(solo), { text: '2 apps · NAS <b> not responding', health: 'down' })
+  const html = appsHTML(solo, '')
+  assert.doesNotMatch(html, /HostMan/, 'no HostMan configured: never mention it')
+  assert.match(appsHTML({ my_apps: [], hosts: [], source: null }, ''), /No apps yet.*data-action="add-app"/s)
+})
+
+test('hosts view lists added apps with an Edit button, escaped', () => {
+  const html = hostsHTML(withMine, 'v1')
+  assert.match(html, /<h2>My apps<\/h2>/)
+  assert.match(html, /data-action="edit-app" data-id="my-a1"/)
+  assert.match(html, /NAS &lt;b&gt;/)
+  assert.doesNotMatch(html, /NAS <b>/)
+  assert.match(hostsHTML({ hosts: [] }, 'v1'), /None yet\./)
 })

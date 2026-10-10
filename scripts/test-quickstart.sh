@@ -58,6 +58,7 @@ export PATH="$STUBS:$PATH"
 export HOMEAPPS_INSTALL_DIR="$T/opt"
 export HOMEAPPS_ENV_FILE="$T/homeapps.env"
 export HOMEAPPS_UNIT="$T/homeapps.service"
+export HOMEAPPS_DATA_DIR="$T/data"
 export HOMEAPPS_SERVICE_USER=root
 export HOMEAPPS_GO_DIR="$(go env GOROOT)"
 export HOMEAPPS_REPO="file://$ROOT"
@@ -74,11 +75,17 @@ grep -qx "HOMEAPPS_HOSTMAN=http://127.0.0.1:1" "$HOMEAPPS_ENV_FILE" || fail "Hos
 grep -q "warn\|cannot read HostMan" "$T/run1.log" || fail "an unreachable HostMan should be reported at the end"
 pass "fresh install serves on :$PORT and saves its settings"
 
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"url":"router.invalid","name":"Router"}' \
+  "http://127.0.0.1:$PORT/api/apps" > /dev/null || fail "could not add an app by address"
+[ -s "$HOMEAPPS_DATA_DIR/apps.json" ] || fail "the added app was not saved in the data directory"
+pass "an app added by address is saved in the data directory"
+
 # 2. Upgrade with nothing set: the saved port and HostMan address are kept.
 bash "$ROOT/scripts/quickstart.sh" > "$T/run2.log" 2>&1 || { cat "$T/run2.log"; fail "upgrade exited non-zero"; }
 health $PORT | grep -q '"app":"homeapps"' || fail "not serving on the saved port after an upgrade"
 grep -qx "HOMEAPPS_HOSTMAN=http://127.0.0.1:1" "$HOMEAPPS_ENV_FILE" || fail "upgrade forgot the HostMan address"
-pass "upgrade keeps the saved settings"
+curl -fsS "http://127.0.0.1:$PORT/api/apps" | grep -q '"name":"Router"' || fail "the apps added by address did not survive the upgrade"
+pass "upgrade keeps the saved settings and the added apps"
 
 # 3. A new build that never answers is rolled back to the previous binary.
 touch "$T/fail-next-start"
@@ -96,4 +103,5 @@ pass "a bad setting is reported, not silent"
 bash "$ROOT/scripts/quickstart.sh" --uninstall > "$T/run5.log" 2>&1 || { cat "$T/run5.log"; fail "uninstall exited non-zero"; }
 [ -z "$(health $PORT)" ] || fail "still serving after uninstall"
 [ ! -e "$HOMEAPPS_INSTALL_DIR" ] && [ ! -e "$HOMEAPPS_UNIT" ] && [ ! -e "$HOMEAPPS_ENV_FILE" ] || fail "uninstall left files behind"
-pass "uninstall stops the service and removes its files"
+[ -s "$HOMEAPPS_DATA_DIR/apps.json" ] || fail "uninstall deleted the apps added by address; it should keep them"
+pass "uninstall stops the service, removes its files and keeps the added apps"

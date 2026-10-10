@@ -26,3 +26,18 @@ func TestFlagErrors(t *testing.T) {
 		t.Error("out-of-range port accepted")
 	}
 }
+
+func TestDataFileDefault(t *testing.T) {
+	c, _ := parseFlags(nil, env(map[string]string{"STATE_DIRECTORY": "/var/lib/homeapps"}))
+	if c.dataFile != "/var/lib/homeapps/apps.json" {
+		t.Errorf("under systemd the list belongs in the state directory, got %q", c.dataFile)
+	}
+	c, _ = parseFlags([]string{"--data", "/tmp/x.json"}, env(map[string]string{"STATE_DIRECTORY": "/s", "HOMEAPPS_DATA": "/e.json"}))
+	if c.dataFile != "/tmp/x.json" {
+		t.Errorf("flag should win: %q", c.dataFile)
+	}
+	c, _ = parseFlags(nil, env(map[string]string{"HOMEAPPS_DATA": "/e.json"}))
+	if c.dataFile != "/e.json" {
+		t.Errorf("env should be used: %q", c.dataFile)
+	}
+}

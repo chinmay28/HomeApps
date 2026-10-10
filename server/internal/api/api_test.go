@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,8 @@ import (
 	"github.com/chinmay28/homeapps/server/internal/branding"
 	"github.com/chinmay28/homeapps/server/internal/hostman"
 	"github.com/chinmay28/homeapps/server/internal/manifest"
+	"github.com/chinmay28/homeapps/server/internal/myapps"
+	"github.com/chinmay28/homeapps/server/internal/probe"
 )
 
 type fakeSource struct {
@@ -43,7 +47,22 @@ func newTestServer(t *testing.T, src *fakeSource) (*Server, *branding.Cache, htt
 	brands := branding.New(func(context.Context, string) (manifest.Brand, error) {
 		return manifest.Brand{ThemeColor: "#e7d3a8", Icon: []byte("<svg></svg>"), IconType: "image/svg+xml"}, nil
 	}, time.Hour, time.Minute)
-	s := New(src, brands, "v2026.10.1", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store, err := myapps.Open(filepath.Join(t.TempDir(), "apps.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		MyApps:  store,
+		Probes:  probe.New(func(context.Context, string) string { return probe.Up }, time.Minute),
+		Brands:  brands,
+		NameOf:  func(context.Context, string) string { return "Named By Manifest" },
+		Version: "v2026.10.1",
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if src != nil { // a nil *fakeSource must stay a nil interface: no HostMan
+		cfg.Source = src
+	}
+	s := New(cfg)
 	mux := http.NewServeMux()
 	s.Routes(mux)
 	return s, brands, mux
@@ -67,7 +86,7 @@ func TestCatalogPinsTheWireShape(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"hosts", "source", "fetched_at"} {
+	for _, k := range []string{"my_apps", "hosts", "source", "hostman_error", "fetched_at"} {
 		if _, ok := body[k]; !ok {
 			t.Errorf("missing top-level %q in %s", k, w.Body)
 		}
@@ -103,7 +122,7 @@ func TestCatalogCachesHostManBriefly(t *testing.T) {
 	}
 }
 
-func TestCatalogErrors(t *testing.T) {
+func TestCatalogWhenHostManFails(t *testing.T) {
 	cases := []struct {
 		err  error
 		want string
@@ -113,10 +132,24 @@ func TestCatalogErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		_, _, h := newTestServer(t, &fakeSource{err: c.err})
+		send(h, http.MethodPost, "/api/apps", `{"url":"router.lan","name":"Router"}`)
 		w := do(h, "/api/catalog")
-		if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), c.want) {
-			t.Errorf("%v -> %d %s; want 502 mentioning %q", c.err, w.Code, w.Body, c.want)
+		var body catalogResponse
+		json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusOK || !strings.Contains(body.HostManError, c.want) {
+			t.Errorf("%v -> %d %s; want 200 with hostman_error mentioning %q", c.err, w.Code, w.Body, c.want)
 		}
+		if len(body.MyApps) != 1 || body.Hosts == nil || len(body.Hosts) != 0 {
+			t.Errorf("HostMan down must not take the added apps with it: %s", w.Body)
+		}
+	}
+}
+
+func TestCatalogWithoutHostMan(t *testing.T) {
+	_, _, h := newTestServer(t, nil)
+	w := do(h, "/api/catalog")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source":null`) || !strings.Contains(w.Body.String(), `"hostman_error":""`) {
+		t.Errorf("no HostMan configured: %d %s", w.Code, w.Body)
 	}
 }
 
@@ -147,5 +180,82 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	}
 	if w := do(h, "/api/nope"); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), `"error"`) {
 		t.Errorf("unknown API path: %d %s", w.Code, w.Body)
+	}
+}
+
+func send(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+	return w
+}
+
+func TestMyAppsLifecycle(t *testing.T) {
+	_, brands, h := newTestServer(t, &fakeSource{ov: sampleOverview()})
+
+	w := send(h, http.MethodPost, "/api/apps", `{"url":"router.lan","name":"Router"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("add: %d %s", w.Code, w.Body)
+	}
+	var added myapps.App
+	json.Unmarshal(w.Body.Bytes(), &added)
+	if added.URL != "http://router.lan/" || added.Name != "Router" {
+		t.Errorf("added %+v", added)
+	}
+
+	w = send(h, http.MethodPost, "/api/apps", `{"url":"nas.lan:5000"}`)
+	var unnamed myapps.App
+	json.Unmarshal(w.Body.Bytes(), &unnamed)
+	if unnamed.Name != "Named By Manifest" {
+		t.Errorf("an unnamed app should take its manifest's name, got %q", unnamed.Name)
+	}
+
+	do(h, "/api/catalog")
+	brands.Wait()
+	var cat catalogResponse
+	json.Unmarshal(do(h, "/api/catalog").Body.Bytes(), &cat)
+	if len(cat.MyApps) != 2 || cat.MyApps[0].ID != added.ID || cat.MyApps[0].Port != 80 || cat.MyApps[1].Port != 5000 {
+		t.Errorf("catalog my_apps = %+v", cat.MyApps)
+	}
+	if cat.MyApps[0].Icon == "" || cat.MyApps[0].Color != "#e7d3a8" {
+		t.Errorf("an added app gets its manifest icon like any other: %+v", cat.MyApps[0])
+	}
+	if len(cat.Hosts) != 1 {
+		t.Errorf("HostMan's hosts still listed beside: %+v", cat.Hosts)
+	}
+
+	if w = send(h, http.MethodPatch, "/api/apps/"+added.ID, `{"name":"Home Router"}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Home Router") {
+		t.Errorf("rename: %d %s", w.Code, w.Body)
+	}
+	if w = send(h, http.MethodDelete, "/api/apps/"+added.ID, ""); w.Code != http.StatusNoContent {
+		t.Errorf("delete: %d %s", w.Code, w.Body)
+	}
+	var list []myapps.App
+	json.Unmarshal(do(h, "/api/apps").Body.Bytes(), &list)
+	if len(list) != 1 || list[0].ID != unnamed.ID {
+		t.Errorf("list after delete = %+v", list)
+	}
+}
+
+func TestMyAppsErrors(t *testing.T) {
+	_, _, h := newTestServer(t, nil)
+	send(h, http.MethodPost, "/api/apps", `{"url":"router.lan"}`)
+	cases := []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodPost, "/api/apps", `{"url":"ftp://x"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/apps", `{"name":"no url"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/apps", `not json`, http.StatusBadRequest},
+		{http.MethodPost, "/api/apps", `{"url":"a.lan","extra":1}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/apps", `{"url":"http://ROUTER.lan/"}`, http.StatusConflict},
+		{http.MethodPatch, "/api/apps/my-nope", `{"name":"x"}`, http.StatusNotFound},
+		{http.MethodPatch, "/api/apps/my-nope", `{}`, http.StatusBadRequest},
+		{http.MethodDelete, "/api/apps/my-nope", ``, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		w := send(h, c.method, c.path, c.body)
+		if w.Code != c.status || !strings.Contains(w.Body.String(), `"error"`) {
+			t.Errorf("%s %s %s -> %d %s; want %d with an error body", c.method, c.path, c.body, w.Code, w.Body, c.status)
+		}
 	}
 }
