@@ -1,7 +1,7 @@
 // Tests for the web client's pure view logic: `node --test web/`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { allApps, appsHTML, esc, filter, hostmanApp, hostsHTML, hue, monogram, normalizeAddress, summary } from '../server/internal/web/assets/view.js'
+import { allApps, appsHTML, esc, filter, hostmanApp, hostsHTML, hue, iconHTML, iconRequest, monogram, normalizeAddress, summary } from '../server/internal/web/assets/view.js'
 
 const catalog = {
   hosts: [
@@ -157,4 +157,34 @@ test('normalizeAddress reads a bare host the way an address bar does', () => {
   assert.equal(normalizeAddress('javascript:alert(1)'), 'javascript:alert(1)')
   assert.equal(normalizeAddress('localhost:3000/x'), 'http://localhost:3000/x')
   assert.equal(normalizeAddress('   '), '')
+})
+
+test('My apps has an Edit mode where a tap edits instead of opening', () => {
+  const normal = appsHTML(withCustom, '')
+  assert.match(normal, /data-action="toggle-edit" aria-pressed="false">Edit</)
+  assert.match(normal, /data-app="ca-1"/)
+  const editing = appsHTML(withCustom, '', true)
+  assert.match(editing, /data-action="toggle-edit" aria-pressed="true">Done</)
+  assert.match(editing, /<button type="button" class="tile tile--edit" data-action="edit-app" data-id="ca-1"/)
+  assert.match(editing, /aria-label="Edit Router"/)
+  const mine = editing.slice(0, editing.indexOf('nakedpi'))
+  assert.doesNotMatch(mine, /data-app="ca-/, 'no custom tile opens its app while editing')
+  assert.doesNotMatch(mine, /data-action="add-app"/, 'Add steps aside while editing')
+  assert.match(editing, /data-app="hm-1"/, "HostMan's apps still open: they are changed in HostMan")
+  assert.doesNotMatch(appsHTML(catalog, ''), /toggle-edit/, 'nothing to edit without custom apps')
+})
+
+test('iconHTML draws the dialog preview: a picture or the monogram', () => {
+  assert.match(iconHTML({ name: 'NAS', icon: 'data:image/png;base64,AAAA' }, true), /<img src="data:image\/png;base64,AAAA"/)
+  assert.match(iconHTML({ name: 'Thought Mesh', icon: '' }, true), /icon--sm[^>]*>TM</)
+})
+
+test('iconRequest turns the dialog\'s icon choice into a request', () => {
+  assert.equal(iconRequest(null), null)
+  assert.deepEqual(iconRequest({ kind: 'auto' }), { method: 'DELETE' })
+  assert.deepEqual(iconRequest({ kind: 'url', url: 'https://cdn/x.png' }), { method: 'PUT', body: { url: 'https://cdn/x.png' } })
+  assert.deepEqual(iconRequest({ kind: 'image', dataURL: 'data:image/png;base64,iVBO+/=' }), { method: 'PUT', body: { data: 'iVBO+/=', type: 'image/png' } })
+  assert.deepEqual(iconRequest({ kind: 'image', dataURL: 'data:;base64,AAAA' }), { method: 'PUT', body: { data: 'AAAA' } })
+  assert.equal(iconRequest({ kind: 'image', dataURL: 'data:text/plain,hello' }), null, 'only base64 data URLs')
+  assert.equal(iconRequest({ kind: 'nope' }), null)
 })

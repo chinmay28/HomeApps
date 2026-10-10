@@ -95,7 +95,9 @@ export function normalizeAddress(input) {
   return 'http://' + s.replace(/^\/+/, '')
 }
 
-function iconHTML(app, small) {
+// An app's icon: its picture when it has one, else its monogram tile. small
+// is the row size on the Hosts page and in the edit dialog.
+export function iconHTML(app, small) {
   const cls = small ? ' icon--sm' : ''
   const dot = app.health ? `<span class="dot dot--${esc(app.health)}"></span>` : ''
   if (app.icon) {
@@ -113,22 +115,33 @@ function tileHTML(app) {
     aria-label="${esc(label)}">${iconHTML(app, false)}<span class="tile__name">${esc(app.name)}</span></a>`
 }
 
-const addButton = (label) => `<button type="button" class="link" data-action="add-app">${label}</button>`
-
-function customSectionHTML(apps) {
-  if (apps.length === 0) return ''
-  return `<section class="section"><div class="section__head"><h2>${CUSTOM_TITLE}</h2>${addButton('Add')}</div>
-    <div class="grid">${apps.map(tileHTML).join('')}</div></section>`
+// A custom app's tile while My apps is being edited: tapping it opens the
+// edit dialog instead of the app.
+function editTileHTML(app) {
+  return `<button type="button" class="tile tile--edit" data-action="edit-app" data-id="${esc(app.id)}"
+    aria-label="${esc(`Edit ${app.name}`)}">${iconHTML(app, false)}<span class="tile__name">${esc(app.name)}</span></button>`
 }
 
-export function appsHTML(catalog, query) {
+const addButton = (label) => `<button type="button" class="link" data-action="add-app">${label}</button>`
+
+function customSectionHTML(apps, editing) {
+  if (apps.length === 0) return ''
+  const toggle = `<button type="button" class="link" data-action="toggle-edit" aria-pressed="${editing}">${editing ? 'Done' : 'Edit'}</button>`
+  const hint = editing ? '<p class="section__hint">Tap an app to change its name, address or icon, or to remove it.</p>' : ''
+  return `<section class="section"><div class="section__head"><h2>${CUSTOM_TITLE}</h2>
+    <span class="section__actions">${toggle}${editing ? '' : addButton('Add')}</span></div>${hint}
+    <div class="grid">${apps.map(editing ? editTileHTML : tileHTML).join('')}</div></section>`
+}
+
+// The apps grid. editing turns the custom apps' tiles into edit buttons.
+export function appsHTML(catalog, query, editing = false) {
   const shown = filter(catalog, query)
   if (shown.hosts.length === 0 && shown.custom.length === 0) {
     return query
       ? `<p class="empty">Nothing matches “${esc(query)}”.</p>`
       : `<p class="empty">No apps with an address to open yet.<br>Deploy one in ${hostmanLink(catalog, 'HostMan')} and it shows up here,<br>or ${addButton('add any web address')} yourself.</p>`
   }
-  return customSectionHTML(shown.custom) + shown.hosts.map((h) => {
+  return customSectionHTML(shown.custom, editing) + shown.hosts.map((h) => {
     const up = h.apps.filter((a) => a.health === 'up').length
     const countCls = up === h.apps.length ? ' section__count--ok' : h.apps.some((a) => a.health === 'down') ? ' section__count--bad' : ''
     return `<section class="section"><div class="section__head"><h2>${esc(h.name)}</h2>
@@ -194,4 +207,20 @@ export function hostsHTML(catalog, version, canChangeServer = false) {
   const src = catalog?.source?.url
   const about = `<p class="about">HomeApps ${esc(version || '')}${src ? `<br>apps from ${hostmanLink(catalog, 'HostMan')}` : ''}${canChangeServer ? '<br><a href="#" data-action="change-server">Switch HomeApps server</a>' : ''}</p>`
   return custom + (cards || '<p class="empty">No hosts.</p>') + about
+}
+
+// The request that applies an icon change from the edit dialog, or null when
+// there is none. change is null (untouched), {kind: 'auto'} (back to the
+// app's own icon), {kind: 'url', url} (a picture's address, which HomeApps
+// fetches and keeps) or {kind: 'image', dataURL} (a picked picture).
+export function iconRequest(change) {
+  if (!change) return null
+  if (change.kind === 'auto') return { method: 'DELETE' }
+  if (change.kind === 'url') return { method: 'PUT', body: { url: change.url } }
+  if (change.kind === 'image') {
+    const m = /^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s.exec(change.dataURL || '')
+    if (!m) return null
+    return { method: 'PUT', body: m[1] ? { data: m[2], type: m[1] } : { data: m[2] } }
+  }
+  return null
 }

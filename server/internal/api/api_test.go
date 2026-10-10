@@ -49,7 +49,13 @@ func newTestServer(t *testing.T, src *fakeSource) (*Server, *branding.Cache, htt
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(src, apps, brands, "v2026.10.1", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	fetchImage := func(_ context.Context, u string) ([]byte, string, error) {
+		if u == "http://img.local/logo.png" {
+			return pngBytes, "image/png", nil
+		}
+		return nil, "", errors.New("connection refused")
+	}
+	s := New(src, apps, brands, fetchImage, "v2026.10.1", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	mux := http.NewServeMux()
 	s.Routes(mux)
 	return s, brands, mux
@@ -105,7 +111,7 @@ func TestCustomAppsLifecycle(t *testing.T) {
 	list := decode(t, do(h, "/api/custom-apps"))["apps"].([]any)
 	app := list[0].(map[string]any)
 	want := map[string]any{"id": id, "name": "Router", "url": "http://192.168.1.1/", "color": "#e7d3a8",
-		"icon": "/api/icons/" + branding.Key("http://192.168.1.1/")}
+		"icon": "/api/icons/" + branding.Key("http://192.168.1.1/"), "custom_icon": false}
 	for k, v := range want {
 		if app[k] != v {
 			t.Errorf("app[%q] = %v, want %v", k, app[k], v)
@@ -120,6 +126,92 @@ func TestCustomAppsLifecycle(t *testing.T) {
 	}
 	if n := len(decode(t, do(h, "/api/custom-apps"))["apps"].([]any)); n != 0 {
 		t.Errorf("%d apps left after remove", n)
+	}
+}
+
+// pngBytes is a minimal image that sniffs as PNG.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 24)...)
+
+func TestCustomAppIcons(t *testing.T) {
+	_, brands, h := newTestServer(t, &fakeSource{err: errors.New("down")})
+	id := decode(t, send(h, http.MethodPost, "/api/custom-apps", `{"name":"Router","url":"http://192.168.1.1"}`))["id"].(string)
+	brands.Wait()
+	iconPath := "/api/custom-apps/" + id + "/icon"
+	if w := do(h, iconPath); w.Code != http.StatusNotFound {
+		t.Errorf("an app with no icon of its own has none to serve: %d", w.Code)
+	}
+
+	// Uploaded: the picture itself, base64 in JSON.
+	body, _ := json.Marshal(map[string]any{"data": pngBytes})
+	w := send(h, http.MethodPut, iconPath, string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("upload: %d %s", w.Code, w.Body)
+	}
+	app := decode(t, w)
+	icon, _ := app["icon"].(string)
+	if !strings.HasPrefix(icon, iconPath+"?v=") || app["custom_icon"] != true || app["color"] != "#e7d3a8" {
+		t.Errorf("after upload: %v; want a versioned icon URL, custom_icon, the manifest's colour", app)
+	}
+	served := do(h, icon)
+	if served.Code != http.StatusOK || served.Header().Get("Content-Type") != "image/png" || served.Body.String() != string(pngBytes) {
+		t.Errorf("serving the upload: %d %q", served.Code, served.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(served.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Error("an uploaded icon is served from our origin; it must be sandboxed")
+	}
+	if w := send(h, http.MethodPut, "/api/custom-apps/"+id, `{"name":"Gateway","url":"http://192.168.1.1"}`); decode(t, w)["custom_icon"] != true {
+		t.Errorf("renaming must keep the icon: %s", w.Body)
+	}
+
+	// By address: fetched once and kept, so it needn't stay reachable.
+	w = send(h, http.MethodPut, iconPath, `{"url":"http://img.local/logo.png"}`)
+	if w.Code != http.StatusOK || decode(t, w)["icon"] != icon {
+		t.Errorf("by address: %d %s; the same picture keeps the same URL", w.Code, w.Body)
+	}
+
+	// Cleared: back to the manifest's icon.
+	w = send(h, http.MethodDelete, iconPath, "")
+	if app := decode(t, w); w.Code != http.StatusOK || app["custom_icon"] != false || app["icon"] != "/api/icons/"+branding.Key("http://192.168.1.1/") {
+		t.Errorf("clear: %d %v", w.Code, app)
+	}
+	if do(h, iconPath).Code != http.StatusNotFound {
+		t.Error("a cleared icon is still served")
+	}
+}
+
+func TestCustomAppIconErrors(t *testing.T) {
+	_, _, h := newTestServer(t, &fakeSource{ov: sampleOverview()})
+	id := decode(t, send(h, http.MethodPost, "/api/custom-apps", `{"name":"A","url":"http://a/"}`))["id"].(string)
+	iconPath := "/api/custom-apps/" + id + "/icon"
+	notImage, _ := json.Marshal(map[string]any{"data": []byte("<html>")})
+	png, _ := json.Marshal(map[string]any{"data": pngBytes})
+
+	formPut := httptest.NewRequest(http.MethodPut, iconPath, strings.NewReader("url=http://img.local/logo.png"))
+	formPut.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	formW := httptest.NewRecorder()
+	h.ServeHTTP(formW, formPut)
+
+	cases := []struct {
+		name string
+		w    *httptest.ResponseRecorder
+		code int
+		says string
+	}{
+		{"form put", formW, http.StatusUnsupportedMediaType, "application/json"},
+		{"neither", send(h, http.MethodPut, iconPath, `{}`), http.StatusBadRequest, "either"},
+		{"both", send(h, http.MethodPut, iconPath, `{"url":"http://img.local/logo.png","data":"AAAA"}`), http.StatusBadRequest, "either"},
+		{"not base64", send(h, http.MethodPut, iconPath, `{"data":"%%%"}`), http.StatusBadRequest, "body"},
+		{"not an image", send(h, http.MethodPut, iconPath, string(notImage)), http.StatusBadRequest, "not a picture"},
+		{"bad address", send(h, http.MethodPut, iconPath, `{"url":"javascript:alert(1)"}`), http.StatusBadRequest, "http://"},
+		{"unreachable", send(h, http.MethodPut, iconPath, `{"url":"http://gone.local/x.png"}`), http.StatusBadRequest, "could not load"},
+		{"unknown app", send(h, http.MethodPut, "/api/custom-apps/ca-nope/icon", string(png)), http.StatusNotFound, "no such app"},
+		{"clear unknown", send(h, http.MethodDelete, "/api/custom-apps/ca-nope/icon", ""), http.StatusNotFound, "no such app"},
+		{"get unknown", do(h, "/api/custom-apps/ca-nope/icon"), http.StatusNotFound, "no such icon"},
+	}
+	for _, c := range cases {
+		if c.w.Code != c.code || !strings.Contains(decode(t, c.w)["error"].(string), c.says) {
+			t.Errorf("%s: %d %s; want %d mentioning %q", c.name, c.w.Code, c.w.Body, c.code, c.says)
+		}
 	}
 }
 

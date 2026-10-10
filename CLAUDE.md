@@ -22,7 +22,7 @@ make android         # debug APK (needs the Android SDK)
   file in the data directory, written atomically) for addresses HostMan
   doesn't run. A new kind of data should come from HostMan's API or from the
   apps themselves (their manifests), not from more local state.
-- **Small, pure, tested components.** `catalog`, `custom.Clean`, `manifest` (parsing),
+- **Small, pure, tested components.** `catalog`, `custom.Clean`/`CleanImage`, `manifest` (parsing),
   `web/assets/view.js` and everything in `apps/android/core` are pure
   functions with table-driven tests. Keep logic there. The HTTP handlers,
   `app.js` and the Android `app/` module are glue.

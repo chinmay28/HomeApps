@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -92,7 +93,7 @@ func TestStoreLifecycleSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []App{{"ca-1", "NAS", "https://nas.local:5001/"}, {"ca-2", "Router", "http://192.168.1.1/"}}
+	want := []App{{ID: "ca-1", Name: "NAS", URL: "https://nas.local:5001/"}, {ID: "ca-2", Name: "Router", URL: "http://192.168.1.1/"}}
 	if got := again.List(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("after reopen: %v; want %v (by name, case-insensitively)", got, want)
 	}
@@ -174,5 +175,87 @@ func TestOpenRefusesABadFile(t *testing.T) {
 		if _, err := Open(p); err == nil {
 			t.Errorf("%s: opened; a bad file must stop the server, not be overwritten", name)
 		}
+	}
+}
+
+// pngBytes is a minimal image that sniffs as PNG.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 24)...)
+
+func TestCleanImage(t *testing.T) {
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)
+	cases := []struct {
+		name     string
+		data     []byte
+		declared string
+		want     string // media type, or the error's words
+		ok       bool
+	}{
+		{"png sniffed", pngBytes, "", "image/png", true},
+		{"png declared as anything", pngBytes, "text/plain", "image/png", true},
+		{"svg declared", svg, "image/svg+xml", "image/svg+xml", true},
+		{"svg undeclared", svg, "", "not a picture", false},
+		{"html", []byte("<html>hi</html>"), "image/png", "not a picture", false},
+		{"empty", nil, "image/png", "empty", false},
+		{"too big", append(slices.Clone(pngBytes), make([]byte, MaxIcon)...), "", "larger", false},
+	}
+	for _, c := range cases {
+		img, err := CleanImage(c.data, c.declared)
+		switch {
+		case c.ok && (err != nil || img.Type != c.want):
+			t.Errorf("%s: %q, %v; want %q", c.name, img.Type, err, c.want)
+		case !c.ok && (!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v; want ErrInvalid saying %q", c.name, err, c.want)
+		}
+	}
+}
+
+func TestCleanURL(t *testing.T) {
+	if got, err := CleanURL(" HTTPS://cdn.example/logo.png "); err != nil || got != "https://cdn.example/logo.png" {
+		t.Errorf("CleanURL = %q, %v", got, err)
+	}
+	if _, err := CleanURL("data:image/png;base64,AAAA"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a data: URL is not an address: %v", err)
+	}
+}
+
+func TestStoreIcons(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.Add(Draft{"A", "http://a/"})
+
+	got, err := s.SetIcon(a.ID, Image{Data: pngBytes})
+	if err != nil || got.Icon == nil || got.Icon.Type != "image/png" {
+		t.Fatalf("SetIcon = %+v, %v", got, err)
+	}
+	if got, ok := s.Get(a.ID); !ok || got.Icon == nil {
+		t.Errorf("Get = %+v, %v; want the app with its icon", got, ok)
+	}
+	if _, ok := s.Get("ca-404"); ok {
+		t.Error("Get found an app that was never added")
+	}
+	if got, _ := s.Update(a.ID, Draft{"A2", "http://a2/"}); got.Icon == nil {
+		t.Error("renaming an app must keep the icon it was given")
+	}
+	again, err := Open(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := again.List(); len(l) != 1 || l[0].Icon == nil || !slices.Equal(l[0].Icon.Data, pngBytes) {
+		t.Errorf("the icon must survive a reopen: %+v", l)
+	}
+	if got, err := again.ClearIcon(a.ID); err != nil || got.Icon != nil {
+		t.Errorf("ClearIcon = %+v, %v", got, err)
+	}
+	if data, _ := os.ReadFile(s.Path()); strings.Contains(string(data), `"icon"`) {
+		t.Errorf("an app without its own icon writes no icon field:\n%s", data)
+	}
+
+	if _, err := s.SetIcon("ca-404", Image{Data: pngBytes}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetIcon unknown: %v", err)
+	}
+	if _, err := s.ClearIcon("ca-404"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ClearIcon unknown: %v", err)
+	}
+	if _, err := s.SetIcon(a.ID, Image{Data: []byte("nope")}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("SetIcon non-image: %v", err)
 	}
 }

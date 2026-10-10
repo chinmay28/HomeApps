@@ -41,6 +41,16 @@
     <label class="field">Name
       <input name="name" type="text" maxlength="64" placeholder="Taken from the address if left blank" autocomplete="off">
     </label>
+    <div class="field">
+      <span id="app-icon-label">Icon</span>
+      <div class="icon-pick" role="group" aria-labelledby="app-icon-label">
+        <span id="app-icon-preview"></span>
+        <label class="btn btn--small">Choose picture<input type="file" accept="image/*" data-action="icon-file" hidden></label>
+        <button type="button" class="btn btn--small" data-action="icon-auto">Use the app's own</button>
+      </div>
+      <input name="icon_url" type="text" inputmode="url" placeholder="or a picture's address, https://…/logo.png" aria-label="Icon picture address" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <span class="field__hint" id="app-icon-hint"></span>
+    </div>
     <p class="sheet__error" id="app-error" role="alert" hidden></p>
     <div class="sheet__actions">
       <button type="button" class="btn btn--danger" data-action="remove" hidden>Remove</button>

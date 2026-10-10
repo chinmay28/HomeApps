@@ -5,9 +5,14 @@
 // takes over — the app opens full screen in its own WebView that stays warm
 // for instant switching. In a browser the tile is an ordinary link to a new
 // tab, so long-press and middle-click behave as they should.
-import { allApps, appsHTML, hostsHTML, normalizeAddress, summary } from './view.js'
+import { allApps, appsHTML, hostsHTML, iconHTML, iconRequest, normalizeAddress, summary } from './view.js'
 
 const POLL_MS = 15000
+// After a save, look again soon: the server fetches a new address's own icon
+// in the background, and it is usually there within a few seconds.
+const SOON_MS = 3000
+// A picked picture is shrunk to this many pixels square before it is sent.
+const ICON_PX = 192
 const STORE_KEY = 'homeapps.catalog'
 const CUSTOM_KEY = 'homeapps.custom'
 
@@ -22,6 +27,7 @@ const state = {
   custom: readStored(CUSTOM_KEY),
   version: '',
   error: '',
+  editingApps: false, // My apps on the Apps page is in edit mode
 }
 
 function readStored(key) {
@@ -71,7 +77,8 @@ function render() {
   const s = summary(m)
   $('summary').innerHTML = `<span class="dot dot--${s.health}"></span>`
   $('summary').append(s.text)
-  view.innerHTML = tab === 'hosts' ? hostsHTML(m, state.version, Boolean(window.HomeAppsNative?.changeServer)) : appsHTML(m, search.value)
+  if (m.custom.length === 0) state.editingApps = false
+  view.innerHTML = tab === 'hosts' ? hostsHTML(m, state.version, Boolean(window.HomeAppsNative?.changeServer)) : appsHTML(m, search.value, state.editingApps)
 }
 
 // api returns the body of a 2xx answer and throws the server's own words
@@ -125,10 +132,14 @@ function openApp(id) {
 const dialog = $('app-dialog')
 const form = $('app-form')
 const removeBtn = form.querySelector('[data-action="remove"]')
+const iconFile = form.querySelector('[data-action="icon-file"]')
+const iconAuto = form.querySelector('[data-action="icon-auto"]')
 let editing = null // the custom app being edited, or null when adding
+let iconChange = null // what iconRequest() takes; null leaves the icon alone
 
 function openDialog(app) {
   editing = app || null
+  iconChange = null
   form.reset()
   form.elements.url.value = app?.url || ''
   form.elements.name.value = app?.name || ''
@@ -138,8 +149,35 @@ function openDialog(app) {
   removeBtn.textContent = 'Remove'
   removeBtn.dataset.armed = ''
   showError('')
+  drawIcon()
   dialog.showModal()
   form.elements.url.focus()
+}
+
+// drawIcon shows the icon the app will have once saved, as far as the page
+// can know it: an address's picture is fetched by the server, not here.
+function drawIcon() {
+  const name = form.elements.name.value.trim() || editing?.name || '?'
+  let icon = ''
+  let hint = ''
+  switch (iconChange?.kind) {
+    case 'image':
+      icon = iconChange.dataURL
+      break
+    case 'url':
+      hint = 'HomeApps fetches this picture when you save.'
+      break
+    case 'auto':
+      if (editing?.custom_icon) hint = "The app's own icon, if it has one, shows after saving."
+      else icon = editing?.icon || ''
+      break
+    default:
+      icon = editing?.icon || ''
+      if (!editing) hint = "Found on the app's page if left alone."
+  }
+  $('app-icon-preview').innerHTML = iconHTML({ name, icon, color: editing?.color }, true)
+  $('app-icon-hint').textContent = hint
+  iconAuto.hidden = !(editing?.custom_icon || iconChange?.kind === 'image' || iconChange?.kind === 'url')
 }
 
 function showError(msg) {
@@ -147,18 +185,23 @@ function showError(msg) {
   $('app-error').textContent = msg
 }
 
-async function save(path, init) {
+// run does one change with the dialog's buttons disabled, then closes the
+// dialog and redraws; on failure the dialog stays open with the server's words.
+async function run(change) {
   for (const b of form.querySelectorAll('button')) b.disabled = true
   try {
-    await api(path, init)
+    await change()
     dialog.close()
     await refresh()
+    setTimeout(refresh, SOON_MS)
   } catch (err) {
     showError(describe(err))
   } finally {
     for (const b of form.querySelectorAll('button')) b.disabled = false
   }
 }
+
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 form.addEventListener('submit', (e) => {
   e.preventDefault()
@@ -167,10 +210,80 @@ form.addEventListener('submit', (e) => {
     showError('Type the address the app opens at.')
     return
   }
-  const body = JSON.stringify({ name: form.elements.name.value, url })
-  const init = { method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body }
-  save(editing ? `/api/custom-apps/${encodeURIComponent(editing.id)}` : '/api/custom-apps', init)
+  const draft = { name: form.elements.name.value, url }
+  run(async () => {
+    const app = editing
+      ? await api(`/api/custom-apps/${encodeURIComponent(editing.id)}`, json('PUT', draft))
+      : await api('/api/custom-apps', json('POST', draft))
+    // From here the app exists: if the icon fails, a retry edits it rather
+    // than adding it twice.
+    editing = app
+    $('app-dialog-title').textContent = 'Edit app'
+    $('app-submit').textContent = 'Save'
+    removeBtn.hidden = false
+    const req = iconRequest(iconChange)
+    if (req) {
+      const path = `/api/custom-apps/${encodeURIComponent(app.id)}/icon`
+      await api(path, req.body ? json(req.method, req.body) : { method: req.method })
+    }
+  })
 })
+
+form.elements.name.addEventListener('input', drawIcon)
+
+form.elements.icon_url.addEventListener('input', () => {
+  const url = normalizeAddress(form.elements.icon_url.value)
+  if (url) iconChange = { kind: 'url', url }
+  else if (iconChange?.kind === 'url') iconChange = null
+  iconFile.value = ''
+  drawIcon()
+})
+
+iconFile.addEventListener('change', async () => {
+  const file = iconFile.files?.[0]
+  if (!file) return
+  try {
+    iconChange = { kind: 'image', dataURL: await shrink(file) }
+    form.elements.icon_url.value = ''
+    showError('')
+  } catch (err) {
+    showError(describe(err))
+  }
+  drawIcon()
+})
+
+iconAuto.addEventListener('click', () => {
+  iconChange = editing?.custom_icon ? { kind: 'auto' } : null
+  form.elements.icon_url.value = ''
+  iconFile.value = ''
+  drawIcon()
+})
+
+// shrink reads a picked picture and redraws it as an ICON_PX square PNG, the
+// whole picture centred: a few KiB to send instead of a phone photo's MiB.
+// It goes through a data: URL because the page's CSP allows those, not blob:.
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const unusable = () => reject(new Error("That file isn't a picture HomeApps can use."))
+    const reader = new FileReader()
+    reader.onerror = unusable
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = unusable
+      img.onload = () => {
+        const w = img.naturalWidth || ICON_PX
+        const h = img.naturalHeight || ICON_PX
+        const scale = ICON_PX / Math.max(w, h)
+        const canvas = document.createElement('canvas')
+        canvas.width = canvas.height = ICON_PX
+        canvas.getContext('2d').drawImage(img, (ICON_PX - w * scale) / 2, (ICON_PX - h * scale) / 2, w * scale, h * scale)
+        resolve(canvas.toDataURL('image/png'))
+      }
+      img.src = reader.result
+    }
+    reader.readAsDataURL(file)
+  })
+}
 
 // Remove asks twice, in place: a WebView without a chrome client has no confirm().
 removeBtn.addEventListener('click', () => {
@@ -180,7 +293,8 @@ removeBtn.addEventListener('click', () => {
     removeBtn.textContent = 'Remove for everyone?'
     return
   }
-  save(`/api/custom-apps/${encodeURIComponent(editing.id)}`, { method: 'DELETE' })
+  const id = editing.id
+  run(() => api(`/api/custom-apps/${encodeURIComponent(id)}`, { method: 'DELETE' }))
 })
 
 form.querySelector('[data-action="cancel"]').addEventListener('click', () => dialog.close())
@@ -189,6 +303,11 @@ view.addEventListener('click', (e) => {
   if (e.target.closest('[data-action="change-server"]')) {
     e.preventDefault()
     window.HomeAppsNative?.changeServer?.()
+    return
+  }
+  if (e.target.closest('[data-action="toggle-edit"]')) {
+    state.editingApps = !state.editingApps
+    render()
     return
   }
   if (e.target.closest('[data-action="add-app"]')) {

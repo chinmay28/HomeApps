@@ -25,6 +25,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/chinmay28/homeapps/server/internal/manifest"
 )
 
 const (
@@ -33,6 +35,9 @@ const (
 	// MaxURL matches the Android shell's limit on what it will open.
 	MaxURL  = 2048
 	MaxName = 64
+	// MaxIcon bounds an icon someone gave an app. The client shrinks a picked
+	// picture to 192px before sending it, which is a few KiB.
+	MaxIcon = 256 << 10
 	// IDPrefix tells a custom app's ID from HostMan's "hm-" ones.
 	IDPrefix = "ca-"
 )
@@ -45,11 +50,20 @@ var (
 )
 
 // App is one custom app. ID is stable for the app's lifetime; the Android
-// shell keys its running WebViews by it.
+// shell keys its running WebViews by it. Icon is nil unless someone gave the
+// app one; it is then drawn instead of whatever the app's manifest declares.
 type App struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	Icon *Image `json:"icon,omitempty"`
+}
+
+// Image is an icon's bytes and media type. Treat it as read-only: List hands
+// out the stored one.
+type Image struct {
+	Type string `json:"type"`
+	Data []byte `json:"data"` // base64 in the file
 }
 
 // Draft is what a person typed: an app before it has an ID.
@@ -63,29 +77,9 @@ type Draft struct {
 // everyone on the network). A blank name becomes the URL's host name.
 // Errors wrap ErrInvalid and say what to fix.
 func Clean(d Draft) (Draft, error) {
-	raw := strings.TrimSpace(d.URL)
-	if raw == "" {
-		return Draft{}, fmt.Errorf("%w: an address is required", ErrInvalid)
-	}
-	if len(raw) > MaxURL {
-		return Draft{}, fmt.Errorf("%w: the address is longer than %d characters", ErrInvalid, MaxURL)
-	}
-	u, err := url.Parse(raw)
+	u, err := cleanURL(d.URL)
 	if err != nil {
-		return Draft{}, fmt.Errorf("%w: %q is not an address", ErrInvalid, raw)
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return Draft{}, fmt.Errorf("%w: the address must start with http:// or https://", ErrInvalid)
-	}
-	if u.Hostname() == "" {
-		return Draft{}, fmt.Errorf("%w: the address has no host", ErrInvalid)
-	}
-	if u.User != nil {
-		return Draft{}, fmt.Errorf("%w: the address must not contain a user name or password", ErrInvalid)
-	}
-	if u.Path == "" && u.RawQuery == "" && u.Fragment == "" {
-		u.Path = "/"
+		return Draft{}, err
 	}
 
 	name := strings.Join(strings.Fields(d.Name), " ")
@@ -99,6 +93,62 @@ func Clean(d Draft) (Draft, error) {
 		name = u.Hostname()
 	}
 	return Draft{Name: name, URL: u.String()}, nil
+}
+
+// CleanURL applies Clean's rules for an address to raw alone: an absolute
+// http or https URL with a host and no credentials. It is what an icon's
+// address must be too.
+func CleanURL(raw string) (string, error) {
+	u, err := cleanURL(raw)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+func cleanURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("%w: an address is required", ErrInvalid)
+	}
+	if len(raw) > MaxURL {
+		return nil, fmt.Errorf("%w: the address is longer than %d characters", ErrInvalid, MaxURL)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q is not an address", ErrInvalid, raw)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%w: the address must start with http:// or https://", ErrInvalid)
+	}
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("%w: the address has no host", ErrInvalid)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("%w: the address must not contain a user name or password", ErrInvalid)
+	}
+	if u.Path == "" && u.RawQuery == "" && u.Fragment == "" {
+		u.Path = "/"
+	}
+	return u, nil
+}
+
+// CleanImage checks that data is an image worth keeping as an icon and names
+// its media type from the bytes. declared is only needed for SVG, which does
+// not sniff as an image. Errors wrap ErrInvalid.
+func CleanImage(data []byte, declared string) (Image, error) {
+	if len(data) == 0 {
+		return Image{}, fmt.Errorf("%w: the icon is empty", ErrInvalid)
+	}
+	if len(data) > MaxIcon {
+		return Image{}, fmt.Errorf("%w: the icon is larger than %d KiB", ErrInvalid, MaxIcon>>10)
+	}
+	typ := manifest.ImageType(declared, "", data)
+	if typ == "" {
+		return Image{}, fmt.Errorf("%w: the icon is not a picture", ErrInvalid)
+	}
+	return Image{Type: typ, Data: data}, nil
 }
 
 // file is the on-disk shape. Version lets a later format be told apart.
@@ -156,6 +206,16 @@ func (s *Store) List() []App {
 	return out
 }
 
+// Get returns the app with id.
+func (s *Store) Get(id string) (App, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := s.indexOf(id); i >= 0 {
+		return s.apps[i], true
+	}
+	return App{}, false
+}
+
 // Add cleans d and saves it as a new app.
 func (s *Store) Add(d Draft) (App, error) {
 	d, err := Clean(d)
@@ -179,7 +239,7 @@ func (s *Store) Add(d Draft) (App, error) {
 	return app, nil
 }
 
-// Update replaces the name and address of the app with id.
+// Update replaces the name and address of the app with id, keeping its icon.
 func (s *Store) Update(id string, d Draft) (App, error) {
 	d, err := Clean(d)
 	if err != nil {
@@ -194,7 +254,37 @@ func (s *Store) Update(id string, d Draft) (App, error) {
 	if s.indexOfURL(d.URL, id) >= 0 {
 		return App{}, ErrDuplicate
 	}
-	app := App{ID: id, Name: d.Name, URL: d.URL}
+	app := s.apps[i]
+	app.Name, app.URL = d.Name, d.URL
+	return s.replace(i, app)
+}
+
+// SetIcon gives the app with id its own icon, cleaned by CleanImage.
+func (s *Store) SetIcon(id string, img Image) (App, error) {
+	img, err := CleanImage(img.Data, img.Type)
+	if err != nil {
+		return App{}, err
+	}
+	return s.setIcon(id, &img)
+}
+
+// ClearIcon takes back the icon SetIcon gave, so the app's own shows again.
+func (s *Store) ClearIcon(id string) (App, error) { return s.setIcon(id, nil) }
+
+func (s *Store) setIcon(id string, img *Image) (App, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.indexOf(id)
+	if i < 0 {
+		return App{}, ErrNotFound
+	}
+	app := s.apps[i]
+	app.Icon = img
+	return s.replace(i, app)
+}
+
+// replace saves the list with app at i. The caller holds mu.
+func (s *Store) replace(i int, app App) (App, error) {
 	next := slices.Clone(s.apps)
 	next[i] = app
 	if err := s.save(next); err != nil {
