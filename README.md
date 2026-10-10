@@ -117,9 +117,11 @@ make version     # the version this tree builds as
 | `web/` | Tests for the client's pure view logic |
 | `apps/android` | The Android shell; `core/` is its pure logic, tested without the SDK |
 
-Releases come from `.github/workflows/release.yml`: run it from the Actions
-tab on `main` (or push a matching `v*` tag). It publishes the server binaries
-for arm64 and amd64 and the Android APK, each with a `.sha256`. The APK is
+Every merge to `main` is released automatically by
+`.github/workflows/release.yml`; it can also be run from the Actions tab, or
+by pushing a matching `v*` tag. It tests the commit, then publishes the
+server binaries for arm64 and amd64 and the Android APK, each with a
+`.sha256`. The APK is
 release-signed when the `HOMEAPPS_KEYSTORE_*` secrets are set, and a debug
 build otherwise.
 
