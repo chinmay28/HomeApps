@@ -1,0 +1,122 @@
+name: Release
+
+# Publishes a GitHub release for the commit it runs on, named for the version
+# that commit builds (scripts/version.sh): the static server binaries for a Pi
+# and a PC, a .sha256 beside each, and the Android APK.
+#
+# Run it from the Actions tab (workflow_dispatch) on main, or push a v* tag;
+# a tag that isn't the version its commit builds is refused.
+#
+# The APK is release-signed when the HOMEAPPS_KEYSTORE_BASE64,
+# HOMEAPPS_KEYSTORE_PASSWORD, HOMEAPPS_KEY_ALIAS and HOMEAPPS_KEY_PASSWORD
+# secrets exist. Without them it is a debug build: installable, but signed by
+# a throwaway CI key, so moving between releases means uninstalling first.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.HOMEAPPS_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the patch number is the commit count
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          v="$(scripts/version.sh)"
+          case "$v" in *.0) echo "::error::$v is an unstamped build (no full history); refusing to release it"; exit 1 ;; esac
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$v" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not the version this commit builds ($v)"; exit 1
+          fi
+          if gh release view "$v" >/dev/null 2>&1; then
+            echo "::error::release $v already exists"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Test
+        run: |
+          (cd server && go test ./...)
+          node --test web/*.test.mjs
+          (cd apps/android/core && ../gradlew test)
+
+      - name: Build the server binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          patch="$(scripts/version.sh --patch)"
+          for arch in arm64 amd64; do
+            (cd server && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/chinmay28/homeapps/server/internal/version.Patch=$patch" \
+              -o "../dist/homeapps-linux-$arch" ./cmd/homeapps)
+          done
+
+      - name: Build the signed APK
+        if: env.HAS_KEY == 'true'
+        run: |
+          set -euo pipefail
+          echo "$HOMEAPPS_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          HOMEAPPS_KEYSTORE="$RUNNER_TEMP/release.keystore" scripts/build-android.sh assembleRelease
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "dist/homeapps-${{ steps.version.outputs.version }}.apk"
+        env:
+          HOMEAPPS_KEYSTORE_BASE64: ${{ secrets.HOMEAPPS_KEYSTORE_BASE64 }}
+          HOMEAPPS_KEYSTORE_PASSWORD: ${{ secrets.HOMEAPPS_KEYSTORE_PASSWORD }}
+          HOMEAPPS_KEY_ALIAS: ${{ secrets.HOMEAPPS_KEY_ALIAS }}
+          HOMEAPPS_KEY_PASSWORD: ${{ secrets.HOMEAPPS_KEY_PASSWORD }}
+
+      - name: Build the debug APK
+        if: env.HAS_KEY != 'true'
+        run: |
+          set -euo pipefail
+          scripts/build-android.sh assembleDebug
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk "dist/homeapps-${{ steps.version.outputs.version }}-debug.apk"
+
+      - name: Checksums
+        run: cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done && ls -l
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          if [ "$HAS_KEY" = true ]; then
+            apk_note="The APK is release-signed."
+          else
+            apk_note="The APK is a debug build signed by a throwaway CI key: it installs fine (allow installs from your browser or file manager), but to move to a later release, uninstall this one first."
+          fi
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          HomeApps $v.
+
+          **Server:** \`homeapps-linux-arm64\` (Raspberry Pi) or \`homeapps-linux-amd64\`. Or install and upgrade with
+          \`curl -fsSL https://raw.githubusercontent.com/chinmay28/homeapps/main/scripts/quickstart.sh | sudo bash\`.
+
+          **Android:** install the \`.apk\`, then enter your HomeApps server's address (for example \`pi5.local:8686\`). $apk_note
+          NOTES
+          sed -i 's/^          //' "$RUNNER_TEMP/notes.md"
+          gh release create "$v" dist/* --target "$GITHUB_SHA" --title "HomeApps $v" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

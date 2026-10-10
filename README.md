@@ -117,6 +117,12 @@ make version     # the version this tree builds as
 | `web/` | Tests for the client's pure view logic |
 | `apps/android` | The Android shell; `core/` is its pure logic, tested without the SDK |
 
+Releases come from `.github/workflows/release.yml`: run it from the Actions
+tab on `main` (or push a matching `v*` tag). It publishes the server binaries
+for arm64 and amd64 and the Android APK, each with a `.sha256`. The APK is
+release-signed when the `HOMEAPPS_KEYSTORE_*` secrets are set, and a debug
+build otherwise.
+
 The version is `vYEAR.MONTH.PATCH`. YEAR and MONTH are constants in
 `server/internal/version/version.go`, and PATCH is the commit count. Run
 `make bump-version` before the first commit on a new branch.
