@@ -73,8 +73,21 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
 
     private var pendingFiles: ValueCallback<Array<Uri>>? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        pendingFiles?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        pendingFiles?.onReceiveValue(pickedFiles(result.resultCode, result.data))
         pendingFiles = null
+    }
+
+    /**
+     * What the picker handed back. FileChooserParams.parseResult reads only the
+     * intent's own address, which is where one picked file arrives; several
+     * arrive as clip data with that address empty, and it answers null for
+     * them — so a page that asked for many files was told none were chosen.
+     */
+    private fun pickedFiles(resultCode: Int, data: Intent?): Array<Uri>? {
+        if (resultCode != RESULT_OK || data == null) return null
+        val clip = data.clipData
+        if (clip != null && clip.itemCount > 0) return Array(clip.itemCount) { clip.getItemAt(it).uri }
+        return data.data?.let { arrayOf(it) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -409,7 +422,12 @@ class MainActivity : ComponentActivity(), SwitcherView.Listener, AppHost.Callbac
         pendingFiles?.onReceiveValue(null)
         pendingFiles = callback
         return try {
-            filePicker.launch(params.createIntent())
+            val intent = params.createIntent()
+            // Not every web view's own intent asks for several, even when the page did.
+            if (params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+            filePicker.launch(intent)
             true
         } catch (_: ActivityNotFoundException) {
             pendingFiles = null

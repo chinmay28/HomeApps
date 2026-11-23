@@ -11,7 +11,7 @@ import "fmt"
 
 const (
 	Year  = 2026
-	Month = 10
+	Month = 11
 )
 
 // Patch is the commit count, set at link time.
